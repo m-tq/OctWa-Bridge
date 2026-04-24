@@ -39,7 +39,7 @@ OctWa Bridge connects native OCT on Octra with wOCT (Wrapped OCT) on Ethereum us
 
 ## Requirements
 
-- **OctWa wallet extension** — [OctWa](https://github.com/octra-labs/octwa) installed in Chrome
+- **OctWa wallet extension** — [OctWa](https://github.com/m-tq/OctWa) installed in Chrome
 - **ETH on your EVM address** — ~0.0005 ETH for gas fees (verifyAndMint uses ~131k gas)
 - Octra mainnet RPC access
 

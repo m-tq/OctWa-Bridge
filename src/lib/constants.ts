@@ -14,8 +14,9 @@ export const ETH_CHAIN_ID = 1
 // Decimals: 1 OCT = 1,000,000 raw units
 export const OCT_DECIMALS = 6
 
-// Default Octra RPC
-export const DEFAULT_OCTRA_RPC = 'http://46.101.86.250:8080'
+// Default Octra RPC — use HTTPS proxy in production to avoid Mixed Content
+// Set via Settings panel or VITE_OCTRA_RPC env var
+export const DEFAULT_OCTRA_RPC = import.meta.env.VITE_OCTRA_RPC || 'http://46.101.86.250:8080'
 
 // ─── Bridge message FIXED fields ─────────────────────────────────────────────
 // CONSTANT across ALL bridge transactions — hardcoded in the ETH contract.

@@ -248,7 +248,7 @@ export async function waitForEpochOnEth(
   lockEpoch: number,
   onProgress?: (msg: string) => void
 ): Promise<void> {
-  const INFURA_KEY = '121cf128273c4f0cb73770b391070d3b'
+  const INFURA_KEY = import.meta.env.VITE_INFURA_API_KEY || '121cf128273c4f0cb73770b391070d3b'
   const LC_ADDR = '0xc01ca57dc7f7c4b6f1b6b87b85d79e5ddf0df55d'
   // latestEpoch() selector
   const LATEST_EPOCH_SEL = '0x9cb118bf'

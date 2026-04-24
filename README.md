@@ -52,12 +52,12 @@ OctWa Bridge connects native OCT on Octra with wOCT (Wrapped OCT) on Ethereum us
 ```bash
 cd bridge
 npm install
-npm run dev
+npm run build   # output → dist/
 ```
 
 ### Environment
 
-Copy `.env.example` to `.env` and fill in your Infura key:
+Copy `.env.example` to `.env`:
 
 ```bash
 cp .env.example .env
@@ -65,6 +65,64 @@ cp .env.example .env
 
 ```env
 VITE_INFURA_API_KEY=your_infura_api_key_here
+VITE_OCTRA_RPC=https://bridge.octwa.pw/rpc
+```
+
+> `VITE_OCTRA_RPC` must point to an **HTTPS** endpoint. See [Nginx Proxy](#nginx-proxy-required-for-https) below.
+
+---
+
+## Nginx Proxy (required for HTTPS)
+
+The Octra node RPC runs on HTTP (`http://46.101.86.250:8080`). Browsers block HTTP requests from HTTPS pages (Mixed Content). You must proxy it through your HTTPS domain.
+
+Add to your Nginx server block (e.g. `/etc/nginx/sites-available/bridge.octwa.pw`):
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name bridge.octwa.pw;
+
+    # ... your existing SSL config ...
+
+    # Serve the bridge app
+    root /path/to/bridge/dist;
+    index index.html;
+    try_files $uri $uri/ /index.html;
+
+    # Proxy Octra RPC — avoids Mixed Content error
+    location /rpc {
+        proxy_pass http://46.101.86.250:8080/rpc;
+        proxy_http_version 1.1;
+        proxy_set_header Content-Type application/json;
+        proxy_set_header X-Real-IP $remote_addr;
+        add_header Access-Control-Allow-Origin *;
+        add_header Access-Control-Allow-Methods "POST, OPTIONS";
+        add_header Access-Control-Allow-Headers "Content-Type";
+
+        if ($request_method = OPTIONS) {
+            return 204;
+        }
+    }
+}
+```
+
+Then set in `.env`:
+
+```env
+VITE_OCTRA_RPC=https://bridge.octwa.pw/rpc
+```
+
+Rebuild after changing `.env`:
+
+```bash
+npm run build
+```
+
+Reload Nginx:
+
+```bash
+sudo nginx -t && sudo systemctl reload nginx
 ```
 
 ---

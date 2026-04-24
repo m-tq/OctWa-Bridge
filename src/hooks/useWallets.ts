@@ -3,7 +3,7 @@ import { ethers } from 'ethers'
 import { getOctBalance } from '@/lib/bridge-service'
 import { setOctraRpc } from '@/lib/octra-rpc'
 
-const INFURA_KEY = '121cf128273c4f0cb73770b391070d3b'
+const INFURA_KEY = import.meta.env.VITE_INFURA_API_KEY || '121cf128273c4f0cb73770b391070d3b'
 const ETH_MAINNET_RPC = `https://mainnet.infura.io/v3/${INFURA_KEY}`
 
 export interface WalletState {

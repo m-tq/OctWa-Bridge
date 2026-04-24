@@ -47,7 +47,7 @@ export function removeClaim(octraTxHash: string) {
   save(data)
 }
 
-const INFURA_KEY = '121cf128273c4f0cb73770b391070d3b'
+const INFURA_KEY = import.meta.env.VITE_INFURA_API_KEY || '121cf128273c4f0cb73770b391070d3b'
 
 /**
  * Check ETH tx status via Infura

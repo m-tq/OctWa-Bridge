@@ -1,0 +1,14 @@
+{
+  "name": "oct-bridge-manual-claim",
+  "version": "1.0.0",
+  "description": "Manual CLI tool to claim wOCT on Ethereum from a lock_to_eth Octra tx hash",
+  "type": "module",
+  "main": "claim.js",
+  "scripts": {
+    "claim": "node claim.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "ethers": "^6.16.0"
+  }
+}

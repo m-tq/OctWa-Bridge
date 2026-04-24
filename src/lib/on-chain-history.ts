@@ -1,14 +1,14 @@
 /**
  * On-chain bridge history — no localStorage.
  *
- * Octra side:
- *   octra_transactionsByAddress(address, limit, offset)
- *   → filter: to == BRIDGE_CONTRACT, op_type == 'call', encrypted_data == 'lock_to_eth'
- *   → contract_receipt(hash) → Locked event → epoch, amount, ethAddress, srcNonce
+ * OCT → wOCT (Octra side):
+ *   octra_transactionsByAddress → filter lock_to_eth calls
+ *   contract_receipt → Locked event → check processedMessages on ETH
  *
- * Ethereum side:
- *   hashBridgeMessage(m) → bytes32 msgHash
- *   processedMessages(msgHash) → bool (true = claimed)
+ * wOCT → OCT (Ethereum side):
+ *   eth_getLogs → BurnInitiated(burnId, burner, octraRecipient, amount, nonce)
+ *   where burner == evmAddress
+ *   Status: tx confirmed = burn done, OCT unlock is automatic by relayer
  */
 
 import { ethers } from 'ethers'
@@ -278,4 +278,120 @@ export async function lookupTxHash(
   record.claimStatus = claimed ? 'claimed' : 'unclaimed'
 
   return record
+}
+
+// ─── wOCT → OCT history (Ethereum side) ──────────────────────────────────────
+
+/**
+ * BurnInitiated event:
+ *   topic0: 0xfaa9b3e2244d80066df764926dce8b97fa7077d982b97f52195a39950fc100b4
+ *   topic1: burnId (bytes32, indexed)
+ *   topic2: burner (address, indexed)
+ *   data:   octraRecipient (string), amount (uint256), nonce (uint64)
+ */
+const BURN_INITIATED_TOPIC0 = '0xfaa9b3e2244d80066df764926dce8b97fa7077d982b97f52195a39950fc100b4'
+
+export interface BurnRecord {
+  direction: 'woct-to-oct'
+  ethTxHash: string
+  blockNumber: number
+  timestamp: number
+  amountWoct: string    // human-readable
+  amountRaw: string     // raw units
+  octraRecipient: string
+  burnNonce: number
+  burnId: string
+  status: 'confirmed'   // burn is always confirmed if in logs
+}
+
+async function getBlockTimestamp(blockHex: string): Promise<number> {
+  const res = await fetch(ETH_RPC, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: 1,
+      method: 'eth_getBlockByNumber',
+      params: [blockHex, false],
+    }),
+  })
+  const json = await res.json()
+  return json.result?.timestamp ? parseInt(json.result.timestamp, 16) * 1000 : Date.now()
+}
+
+/**
+ * Fetch wOCT→OCT burn history for an EVM address.
+ * Uses eth_getLogs to find BurnInitiated events where burner == evmAddress.
+ * Looks back ~100,000 blocks (~2 weeks).
+ */
+export async function fetchBurnHistory(evmAddress: string): Promise<BurnRecord[]> {
+  // Get current block
+  const blockRes = await fetch(ETH_RPC, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_blockNumber', params: [] }),
+  })
+  const blockJson = await blockRes.json()
+  const latestBlock = parseInt(blockJson.result, 16)
+  const fromBlock = Math.max(0, latestBlock - 100_000)
+
+  // burner is topic2 (index 1 in topics array after topic0)
+  const burnerTopic = '0x' + evmAddress.slice(2).toLowerCase().padStart(64, '0')
+
+  const logsRes = await fetch(ETH_RPC, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: 1,
+      method: 'eth_getLogs',
+      params: [{
+        address:   WOCT_CONTRACT_ADDRESS,
+        topics:    [BURN_INITIATED_TOPIC0, null, burnerTopic],
+        fromBlock: '0x' + fromBlock.toString(16),
+        toBlock:   'latest',
+      }],
+    }),
+  })
+  const logsJson = await logsRes.json()
+  const logs: Array<Record<string, unknown>> = logsJson.result ?? []
+
+  // Take last 20
+  const recent = logs.slice(-20).reverse()
+
+  const abiCoder = ethers.AbiCoder.defaultAbiCoder()
+
+  const records = await Promise.all(recent.map(async log => {
+    const topics = log.topics as string[]
+    const data   = log.data as string
+    const blockHex = log.blockNumber as string
+    const txHash   = log.transactionHash as string
+
+    // Decode non-indexed data: (string octraRecipient, uint256 amount, uint64 nonce)
+    let octraRecipient = ''
+    let amountRaw = '0'
+    let burnNonce = 0
+    try {
+      const decoded = abiCoder.decode(['string', 'uint256', 'uint64'], data)
+      octraRecipient = decoded[0] as string
+      amountRaw      = (decoded[1] as bigint).toString()
+      burnNonce      = Number(decoded[2] as bigint)
+    } catch { /* ignore decode errors */ }
+
+    const blockNumber = parseInt(blockHex, 16)
+    const timestamp   = await getBlockTimestamp(blockHex)
+
+    return {
+      direction:      'woct-to-oct' as const,
+      ethTxHash:      txHash,
+      blockNumber,
+      timestamp,
+      amountWoct:     (parseInt(amountRaw) / Math.pow(10, OCT_DECIMALS)).toFixed(6),
+      amountRaw,
+      octraRecipient,
+      burnNonce,
+      burnId:         topics[1] ?? '',
+      status:         'confirmed' as const,
+    }
+  }))
+
+  return records
 }

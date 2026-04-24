@@ -5,8 +5,8 @@ import {
   CheckCircle2, Zap, Clock, Search, AlertCircle,
 } from 'lucide-react'
 import { cn, shortenAddress } from '@/lib/utils'
-import type { BridgeTxRecord } from '@/lib/on-chain-history'
-import { fetchBridgeHistory, lookupTxHash } from '@/lib/on-chain-history'
+import type { BridgeTxRecord, BurnRecord } from '@/lib/on-chain-history'
+import { fetchBridgeHistory, fetchBurnHistory, lookupTxHash } from '@/lib/on-chain-history'
 import { claimWoctOnEthereum, refetchLockedEvent, waitForEpochOnEth } from '@/lib/bridge-service'
 import { getOctraRpc } from '@/lib/octra-rpc'
 import {
@@ -21,6 +21,7 @@ const pageVariants = {
 
 interface HistoryPanelProps {
   octraAddress?: string
+  evmAddress?: string
 }
 
 const STATUS_LABEL: Record<BridgeTxRecord['claimStatus'], string> = {
@@ -37,8 +38,9 @@ const STATUS_CLASS: Record<BridgeTxRecord['claimStatus'], string> = {
   unknown:       'text-muted-foreground border-border',
 }
 
-export function HistoryPanel({ octraAddress }: HistoryPanelProps) {
+export function HistoryPanel({ octraAddress, evmAddress }: HistoryPanelProps) {
   const [records, setRecords]       = useState<BridgeTxRecord[]>([])
+  const [burnRecords, setBurnRecords] = useState<BurnRecord[]>([])
   const [loading, setLoading]       = useState(false)
   const [error, setError]           = useState<string | null>(null)
   const [claiming, setClaiming]     = useState<string | null>(null)
@@ -52,18 +54,25 @@ export function HistoryPanel({ octraAddress }: HistoryPanelProps) {
   const [lookupError, setLookupError]   = useState<string | null>(null)
 
   const load = useCallback(async () => {
-    if (!octraAddress) return
+    if (!octraAddress && !evmAddress) return
     setLoading(true)
     setError(null)
     try {
-      const data = await fetchBridgeHistory(octraAddress, getOctraRpc())
-      setRecords(data)
+      const [lockData, burnData] = await Promise.allSettled([
+        octraAddress ? fetchBridgeHistory(octraAddress, getOctraRpc()) : Promise.resolve([]),
+        evmAddress   ? fetchBurnHistory(evmAddress) : Promise.resolve([]),
+      ])
+      if (lockData.status === 'fulfilled') setRecords(lockData.value)
+      if (burnData.status === 'fulfilled') setBurnRecords(burnData.value)
+      if (lockData.status === 'rejected' && burnData.status === 'rejected') {
+        setError(lockData.reason?.message || 'Failed to load history')
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setLoading(false)
     }
-  }, [octraAddress])
+  }, [octraAddress, evmAddress])
 
   useEffect(() => { load() }, [load])
 
@@ -273,9 +282,9 @@ export function HistoryPanel({ octraAddress }: HistoryPanelProps) {
         </div>
 
         {/* History list */}
-        {!octraAddress ? (
+        {!octraAddress && !evmAddress ? (
           <p className="text-xs text-muted-foreground text-center py-8">Connect wallet to view history.</p>
-        ) : loading && records.length === 0 ? (
+        ) : loading && records.length === 0 && burnRecords.length === 0 ? (
           <div className="flex items-center justify-center gap-2 py-12 text-xs text-muted-foreground">
             <Loader2 size={13} className="animate-spin" />
             Loading on-chain history...
@@ -285,10 +294,11 @@ export function HistoryPanel({ octraAddress }: HistoryPanelProps) {
             <AlertCircle size={13} />
             {error}
           </div>
-        ) : records.length === 0 ? (
+        ) : records.length === 0 && burnRecords.length === 0 ? (
           <p className="text-xs text-muted-foreground text-center py-8">No bridge transactions found.</p>
         ) : (
           <div className="space-y-2">
+            {/* OCT → wOCT records */}
             {records.map(rec => {
               const isClaiming = claiming === rec.octraTxHash
               const err  = claimErr[rec.octraTxHash]
@@ -411,6 +421,63 @@ export function HistoryPanel({ octraAddress }: HistoryPanelProps) {
                 </div>
               )
             })}
+
+            {/* wOCT → OCT burn records */}
+            {burnRecords.length > 0 && (
+              <>
+                {records.length > 0 && (
+                  <div className="flex items-center gap-2 py-1">
+                    <div className="flex-1 border-t border-dashed border-border" />
+                    <span className="text-[10px] text-muted-foreground">wOCT → OCT</span>
+                    <div className="flex-1 border-t border-dashed border-border" />
+                  </div>
+                )}
+                {burnRecords.map(burn => (
+                  <div key={burn.ethTxHash} className="border border-primary/20 p-3 text-xs">
+                    {/* Top: amount + status */}
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-muted-foreground">wOCT</span>
+                        <ArrowRight size={10} className="text-muted-foreground" />
+                        <span className="text-muted-foreground">OCT</span>
+                        <span className="font-medium">{burn.amountWoct} wOCT</span>
+                      </div>
+                      <span className="text-[10px] px-1.5 py-0.5 border text-primary border-primary/30 flex items-center gap-1">
+                        <CheckCircle2 size={9} />
+                        burned
+                      </span>
+                    </div>
+
+                    {/* Tx info */}
+                    <div className="space-y-1 text-muted-foreground">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px]">ETH TX <span className="text-muted-foreground/60">| Block: {burn.blockNumber.toLocaleString()}</span></span>
+                        <a
+                          href={`https://etherscan.io/tx/${burn.ethTxHash}`}
+                          target="_blank" rel="noopener noreferrer"
+                          className="flex items-center gap-1 hover-glow transition-all font-mono text-[10px]"
+                        >
+                          {shortenAddress(burn.ethTxHash, 8)}
+                          <ExternalLink size={9} />
+                        </a>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px]">OCT Recipient</span>
+                        <span className="font-mono text-[10px]">{shortenAddress(burn.octraRecipient, 8)}</span>
+                      </div>
+                      <div className="text-[10px] text-muted-foreground/60">
+                        {new Date(burn.timestamp).toLocaleString()}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1 text-[10px] text-muted-foreground mt-2">
+                      <Clock size={9} />
+                      OCT unlock processed automatically by bridge relayer
+                    </div>
+                  </div>
+                ))}
+              </>
+            )}
           </div>
         )}
       </motion.div>

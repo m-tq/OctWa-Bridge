@@ -74,7 +74,7 @@ function AppContent() {
           )}
           {activePage === 'history' && (
             <motion.div key="history" variants={pageVariants} initial="initial" animate="animate" exit="exit" className="w-full h-full">
-              <HistoryPanel octraAddress={octraAddress} />
+              <HistoryPanel octraAddress={octraAddress} evmAddress={evmAddress} />
             </motion.div>
           )}
           {activePage === 'about' && (

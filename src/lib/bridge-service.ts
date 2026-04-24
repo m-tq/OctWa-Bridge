@@ -421,26 +421,65 @@ export async function sendEvmContractCall(params: {
   return txHash!
 }
 
-export async function approveWoct(amount: string, signer: ethers.Signer): Promise<string> {
-  const rawAmount = toRawUnits(amount, OCT_DECIMALS)
-  const contract = new ethers.Contract(WOCT_TOKEN_ADDRESS, WOCT_ABI, signer)
-  const tx = await contract.approve(WOCT_CONTRACT_ADDRESS, rawAmount)
-  const receipt = await tx.wait()
-  return receipt.hash as string
+// ─── wOCT → OCT ──────────────────────────────────────────────────────────────
+
+/**
+ * Burn wOCT on Ethereum to receive OCT on Octra.
+ *
+ * Uses burnToOctra(octraRecipient, amount) — single call, no approve needed.
+ * Bridge relayer detects the Burned event and calls unlock_trusted on Octra.
+ * OCT is unlocked to octraRecipient (~2 min after burn confirms).
+ *
+ * burnCapPerTx  = 100,000,000,000 raw = 100,000 wOCT
+ * burnCapDaily  = 1,000,000,000,000 raw = 1,000,000 wOCT
+ */
+export async function burnWoctToOctra(params: {
+  octraRecipient: string   // Octra address string
+  amountWoct: string       // human-readable, e.g. "5.0"
+  capabilityId: string
+  nonce: number
+}): Promise<string> {
+  const { octraRecipient, amountWoct, capabilityId, nonce } = params
+
+  const rawAmount = toRawUnits(amountWoct, OCT_DECIMALS)
+  if (rawAmount <= 0n) throw new Error('Amount must be greater than 0')
+
+  const iface = new ethers.Interface(WOCT_ABI as ethers.InterfaceAbi)
+  const calldata = iface.encodeFunctionData('burnToOctra', [
+    octraRecipient,
+    rawAmount,
+  ])
+
+  console.log('[Bridge] burnToOctra calldata:', calldata.slice(0, 60) + '...')
+  console.log('[Bridge] octraRecipient:', octraRecipient)
+  console.log('[Bridge] rawAmount:', rawAmount.toString())
+
+  return sendEvmContractCall({ capabilityId, to: WOCT_CONTRACT_ADDRESS, calldata, nonce })
 }
 
-export async function burnWoct(amount: string, signer: ethers.Signer): Promise<string> {
-  const rawAmount = toRawUnits(amount, OCT_DECIMALS)
-  const contract = new ethers.Contract(WOCT_TOKEN_ADDRESS, WOCT_ABI, signer)
-  const tx = await contract.burn(rawAmount)
-  const receipt = await tx.wait()
-  return receipt.hash as string
+/**
+ * Get wOCT burn caps from the contract
+ */
+export async function getWoctBurnCaps(provider: ethers.Provider): Promise<{
+  perTx: string   // human-readable max per tx
+  daily: string   // human-readable daily cap
+}> {
+  const contract = new ethers.Contract(WOCT_CONTRACT_ADDRESS, WOCT_ABI, provider)
+  const [perTx, daily] = await Promise.all([
+    contract.burnCapPerTx() as Promise<bigint>,
+    contract.burnCapDaily() as Promise<bigint>,
+  ])
+  return {
+    perTx:  (Number(perTx)  / Math.pow(10, OCT_DECIMALS)).toFixed(0),
+    daily:  (Number(daily)  / Math.pow(10, OCT_DECIMALS)).toFixed(0),
+  }
 }
 
 // ─── Balance helpers ──────────────────────────────────────────────────────────
 
 export async function getWoctBalance(ethAddress: string, provider: ethers.Provider): Promise<string> {
-  const contract = new ethers.Contract(WOCT_TOKEN_ADDRESS, WOCT_ABI, provider)
+  // wOCT token IS the bridge contract (0xE7eD69b852fd2a1406080B26A37e8E04e7dA4caE)
+  const contract = new ethers.Contract(WOCT_CONTRACT_ADDRESS, WOCT_ABI, provider)
   const raw: bigint = await contract.balanceOf(ethAddress)
   return (Number(raw) / Math.pow(10, OCT_DECIMALS)).toFixed(6)
 }

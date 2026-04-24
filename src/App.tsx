@@ -26,6 +26,7 @@ function AppContent() {
     ethSigner,
     octBalance,
     ethBalance,
+    woctBalance,
     connected,
     loading,
     balanceLoading,
@@ -64,6 +65,7 @@ function AppContent() {
                 ethSigner={ethSigner}
                 octBalance={octBalance}
                 ethBalance={ethBalance}
+                woctBalance={woctBalance}
                 balanceLoading={balanceLoading}
                 onRefreshBalances={refreshBalances}
                 onConnect={connect}

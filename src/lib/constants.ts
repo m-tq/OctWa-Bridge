@@ -52,6 +52,7 @@ export const BRIDGE_PROOF_API = 'https://bridge-api.octra.org'
 
 // wOCT contract ABI (minimal)
 export const WOCT_ABI = [
+  // ── OCT → wOCT ──────────────────────────────────────────────────────────────
   {
     name: 'verifyAndMint',
     type: 'function',
@@ -79,23 +80,35 @@ export const WOCT_ABI = [
     ],
     outputs: [],
   },
+  // ── wOCT → OCT ──────────────────────────────────────────────────────────────
+  // Single call — no separate approve needed
+  // Bridge relayer detects burn event and calls unlock_trusted on Octra
   {
-    name: 'approve',
+    name: 'burnToOctra',
     type: 'function',
     stateMutability: 'nonpayable',
     inputs: [
-      { name: 'spender', type: 'address' },
-      { name: 'amount',  type: 'uint256' },
+      { name: 'octraRecipient', type: 'string'  },  // Octra address string
+      { name: 'amount',         type: 'uint256' },  // raw units (6 decimals)
     ],
-    outputs: [{ type: 'bool' }],
+    outputs: [{ type: 'uint64' }],  // returns burnNonce
+  },
+  // Burn caps (read-only)
+  {
+    name: 'burnCapPerTx',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ type: 'uint256' }],
   },
   {
-    name: 'burn',
+    name: 'burnCapDaily',
     type: 'function',
-    stateMutability: 'nonpayable',
-    inputs: [{ name: 'amount', type: 'uint256' }],
-    outputs: [],
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ type: 'uint256' }],
   },
+  // ── ERC-20 helpers ───────────────────────────────────────────────────────────
   {
     name: 'balanceOf',
     type: 'function',

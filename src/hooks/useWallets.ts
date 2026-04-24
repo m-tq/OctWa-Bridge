@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { ethers } from 'ethers'
-import { getOctBalance } from '@/lib/bridge-service'
+import { getOctBalance, getWoctBalance } from '@/lib/bridge-service'
 import { setOctraRpc } from '@/lib/octra-rpc'
 
 const INFURA_KEY = import.meta.env.VITE_INFURA_API_KEY || '121cf128273c4f0cb73770b391070d3b'
@@ -12,7 +12,8 @@ export interface WalletState {
   ethSigner?: ethers.Signer
   ethProvider?: ethers.JsonRpcProvider
   octBalance?: string   // OCT on Octra chain
-  ethBalance?: string   // ETH on Ethereum (native, not wOCT)
+  ethBalance?: string   // ETH native on Ethereum
+  woctBalance?: string  // wOCT on Ethereum
   loading: boolean
   balanceLoading: boolean
   connected: boolean
@@ -78,6 +79,7 @@ export function useWallets() {
         // Clear old balances on wallet switch
         octBalance: undefined,
         ethBalance: undefined,
+        woctBalance: undefined,
       }))
 
       await refreshBalancesInternal(octraAddress, evmAddress, provider)
@@ -91,7 +93,7 @@ export function useWallets() {
 
   const disconnect = useCallback(async () => {
     try { await window.octra?.disconnect() } catch { /* ignore */ }
-    setState({ loading: false, balanceLoading: false, connected: false, octBalance: undefined, ethBalance: undefined })
+    setState({ loading: false, balanceLoading: false, connected: false, octBalance: undefined, ethBalance: undefined, woctBalance: undefined })
     signerRef.current = null
   }, [])
 
@@ -100,15 +102,16 @@ export function useWallets() {
     evmAddr: string,
     provider: ethers.JsonRpcProvider
   ) => {
-    const [oct, eth] = await Promise.allSettled([
+    const [oct, eth, woct] = await Promise.allSettled([
       getOctBalance(octraAddr),
-      // ETH native balance via provider (not wOCT)
       provider.getBalance(evmAddr).then(wei => ethers.formatEther(wei)),
+      getWoctBalance(evmAddr, provider),
     ])
     setState(s => ({
       ...s,
-      octBalance: oct.status === 'fulfilled' ? oct.value : s.octBalance,
-      ethBalance: eth.status === 'fulfilled' ? eth.value : s.ethBalance,
+      octBalance:  oct.status  === 'fulfilled' ? oct.value  : s.octBalance,
+      ethBalance:  eth.status  === 'fulfilled' ? eth.value  : s.ethBalance,
+      woctBalance: woct.status === 'fulfilled' ? woct.value : s.woctBalance,
     }))
   }
 

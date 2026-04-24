@@ -33,6 +33,7 @@ import {
   WOCT_CONTRACT_ADDRESS,
   WOCT_TOKEN_ADDRESS,
   WOCT_ABI,
+  WOCT_TOKEN_ABI,
   OCT_DECIMALS,
   OCTRA_CHAIN_ID,
   ETH_CHAIN_ID,
@@ -478,8 +479,8 @@ export async function getWoctBurnCaps(provider: ethers.Provider): Promise<{
 // ─── Balance helpers ──────────────────────────────────────────────────────────
 
 export async function getWoctBalance(ethAddress: string, provider: ethers.Provider): Promise<string> {
-  // wOCT token IS the bridge contract (0xE7eD69b852fd2a1406080B26A37e8E04e7dA4caE)
-  const contract = new ethers.Contract(WOCT_CONTRACT_ADDRESS, WOCT_ABI, provider)
+  // wOCT token contract: 0x4647e1fe715c9e23959022c2416c71867f5a6e80
+  const contract = new ethers.Contract(WOCT_TOKEN_ADDRESS, WOCT_TOKEN_ABI, provider)
   const raw: bigint = await contract.balanceOf(ethAddress)
   return (Number(raw) / Math.pow(10, OCT_DECIMALS)).toFixed(6)
 }

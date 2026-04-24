@@ -50,7 +50,16 @@ export const BRIDGE_TOKEN_ID      = '0x412ec1126381d672a9f42b8612e4bc9ee64f5b646
 // Bridge proof API — served by the Octra bridge relayer
 export const BRIDGE_PROOF_API = 'https://bridge-api.octra.org'
 
-// wOCT contract ABI (minimal)
+// wOCT token minimal ABI (for balanceOf on 0x4647...)
+export const WOCT_TOKEN_ABI = [
+  {
+    name: 'balanceOf',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'account', type: 'address' }],
+    outputs: [{ type: 'uint256' }],
+  },
+] as const
 export const WOCT_ABI = [
   // ── OCT → wOCT ──────────────────────────────────────────────────────────────
   {

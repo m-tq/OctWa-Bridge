@@ -65,10 +65,10 @@ cp .env.example .env
 
 ```env
 VITE_INFURA_API_KEY=your_infura_api_key_here
-VITE_OCTRA_RPC=https://bridge.octwa.pw/rpc
+VITE_OCTRA_RPC=https://bridge.octwa.pw
 ```
 
-> `VITE_OCTRA_RPC` must point to an **HTTPS** endpoint. See [Nginx Proxy](#nginx-proxy-required-for-https) below.
+> `VITE_OCTRA_RPC` is the **base URL** (no `/rpc` suffix — the app appends it automatically).
 
 ---
 
@@ -91,6 +91,7 @@ server {
     try_files $uri $uri/ /index.html;
 
     # Proxy Octra RPC — avoids Mixed Content error
+    # App calls /rpc, we forward to the Octra node
     location /rpc {
         proxy_pass http://46.101.86.250:8080/rpc;
         proxy_http_version 1.1;

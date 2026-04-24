@@ -8,7 +8,6 @@ import { Footer } from './components/Footer'
 import { BridgePanel } from './components/BridgePanel'
 import { HistoryPanel } from './components/HistoryPanel'
 import { AboutPanel } from './components/AboutPanel'
-import { SettingsPanel } from './components/SettingsPanel'
 import { useWallets } from './hooks/useWallets'
 
 const pageVariants = {
@@ -37,7 +36,6 @@ function AppContent() {
 
   return (
     <div className="app-layout">
-      {/* Header */}
       <Header
         connected={connected}
         loading={loading}
@@ -47,7 +45,6 @@ function AppContent() {
         onDisconnect={disconnect}
       />
 
-      {/* Sidebar */}
       <div className="relative" style={{ gridColumn: 1, gridRow: 2 }}>
         <Sidebar
           open={sidebarOpen}
@@ -57,18 +54,10 @@ function AppContent() {
         />
       </div>
 
-      {/* Main content */}
       <main className="app-main overflow-hidden">
         <AnimatePresence mode="wait">
           {activePage === 'bridge' && (
-            <motion.div
-              key="bridge"
-              variants={pageVariants}
-              initial="initial"
-              animate="animate"
-              exit="exit"
-              className="w-full h-full"
-            >
+            <motion.div key="bridge" variants={pageVariants} initial="initial" animate="animate" exit="exit" className="w-full h-full">
               <BridgePanel
                 octraAddress={octraAddress}
                 evmAddress={evmAddress}
@@ -82,47 +71,19 @@ function AppContent() {
             </motion.div>
           )}
           {activePage === 'history' && (
-            <motion.div
-              key="history"
-              variants={pageVariants}
-              initial="initial"
-              animate="animate"
-              exit="exit"
-              className="w-full h-full"
-            >
+            <motion.div key="history" variants={pageVariants} initial="initial" animate="animate" exit="exit" className="w-full h-full">
               <HistoryPanel octraAddress={octraAddress} />
             </motion.div>
           )}
           {activePage === 'about' && (
-            <motion.div
-              key="about"
-              variants={pageVariants}
-              initial="initial"
-              animate="animate"
-              exit="exit"
-              className="w-full h-full"
-            >
+            <motion.div key="about" variants={pageVariants} initial="initial" animate="animate" exit="exit" className="w-full h-full">
               <AboutPanel />
-            </motion.div>
-          )}
-          {activePage === 'settings' && (
-            <motion.div
-              key="settings"
-              variants={pageVariants}
-              initial="initial"
-              animate="animate"
-              exit="exit"
-              className="w-full h-full"
-            >
-              <SettingsPanel />
             </motion.div>
           )}
         </AnimatePresence>
       </main>
 
-      {/* Footer */}
       <Footer />
-
       <Toaster position="bottom-right" theme="dark" />
     </div>
   )

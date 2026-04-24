@@ -22,11 +22,8 @@ export function useWallets() {
   const [state, setState] = useState<WalletState>({ loading: false, balanceLoading: false, connected: false })
   const signerRef = useRef<ethers.Wallet | null>(null)
 
-  // Restore saved RPC on mount
-  useEffect(() => {
-    const saved = localStorage.getItem('bridge-octra-rpc')
-    if (saved) setOctraRpc(saved)
-  }, [])
+  // RPC is fixed to env var — no localStorage override
+  // This prevents Mixed Content errors on HTTPS deployments
 
   /**
    * Connect via Octra wallet extension (window.octra).

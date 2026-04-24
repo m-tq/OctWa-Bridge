@@ -121,10 +121,13 @@ export async function lockOctOnOctra(params: {
   if (!signature) throw new Error('Wallet rejected signing')
   console.log('[Bridge] signature:', signature)
 
-  // Get public key
+  // Get public key — must match the wallet that signed
   const pubKey = await getPublicKey(octraAddress)
-  console.log('[Bridge] pubKey:', pubKey)
-  if (!pubKey) throw new Error('Could not fetch public key for address')
+  console.log('[Bridge] pubKey from RPC:', pubKey)
+  if (!pubKey) throw new Error(
+    `Could not fetch public key for ${octraAddress}. ` +
+    'Make sure this wallet has been registered on Octra (has sent at least one transaction).'
+  )
 
   // Full tx object to submit (includes signature + public_key)
   const signedTx = {

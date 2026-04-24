@@ -39,11 +39,18 @@ export function useWallets() {
     try {
       setState(s => ({ ...s, loading: true }))
 
-      // Connect to Octra extension — returns evmAddress already derived
+      // Disconnect first to clear any cached connection in the extension
+      // This ensures the extension uses the currently active wallet
+      try { await window.octra.disconnect() } catch { /* ignore */ }
+
+      // Small delay to let extension process disconnect
+      await new Promise(r => setTimeout(r, 200))
+
+      // Connect fresh — extension will use currently active wallet
       const conn = await window.octra.connect({
         circle: 'oct-bridge',
         appOrigin: window.location.origin,
-        appName: 'OCT Bridge',
+        appName: 'OctWa Bridge',
       })
 
       const octraAddress = conn.walletPubKey || (conn as Record<string, unknown>).address as string
@@ -53,14 +60,11 @@ export function useWallets() {
         throw new Error('Wallet did not return an EVM address. Please update your OctWa extension.')
       }
 
-      // Create ethers provider (Infura mainnet)
-      const provider = new ethers.JsonRpcProvider(ETH_MAINNET_RPC)
+      console.log('[Bridge] Connected:', { octraAddress, evmAddress })
 
-      // Create an ethers signer that delegates signing to the Octra extension.
-      // The extension holds the private key; we use a custom signer that calls
-      // window.octra.invoke with method 'sign_evm_tx' for actual tx signing.
+      const provider = new ethers.JsonRpcProvider(ETH_MAINNET_RPC)
       const signer = new OctraEVMSigner(evmAddress, provider)
-      signerRef.current = null // not a plain ethers.Wallet
+      signerRef.current = null
 
       setState(s => ({
         ...s,
@@ -71,9 +75,11 @@ export function useWallets() {
         connected: true,
         loading: false,
         balanceLoading: true,
+        // Clear old balances on wallet switch
+        octBalance: undefined,
+        ethBalance: undefined,
       }))
 
-      // Fetch balances
       await refreshBalancesInternal(octraAddress, evmAddress, provider)
       setState(s => ({ ...s, balanceLoading: false }))
     } catch (err) {
@@ -83,8 +89,9 @@ export function useWallets() {
     }
   }, [])
 
-  const disconnect = useCallback(() => {
-    setState({ loading: false, balanceLoading: false, connected: false })
+  const disconnect = useCallback(async () => {
+    try { await window.octra?.disconnect() } catch { /* ignore */ }
+    setState({ loading: false, balanceLoading: false, connected: false, octBalance: undefined, ethBalance: undefined })
     signerRef.current = null
   }, [])
 

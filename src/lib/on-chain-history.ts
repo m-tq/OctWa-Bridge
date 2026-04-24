@@ -140,8 +140,8 @@ async function fetchLockTxs(
   return txs
     .filter(tx =>
       tx.to === OCTRA_BRIDGE_CONTRACT &&
-      tx.op_type === 'call' &&
-      tx.encrypted_data === 'lock_to_eth'
+      tx.op_type === 'call'
+      // Note: encrypted_data field is not always present — method validated via contract_receipt
     )
     .slice(0, limit)
     .map(tx => ({
@@ -180,7 +180,7 @@ export async function fetchBridgeHistory(
     try {
       // Get Locked event data from contract_receipt
       const receipt = await getContractReceipt(tx.hash)
-      if (!receipt?.success) return record
+      if (!receipt?.success || receipt.method !== 'lock_to_eth') return record
 
       const lockedEvent = receipt.events.find(e => e.event === 'Locked')
       if (!lockedEvent || lockedEvent.values.length < 4) return record
@@ -222,7 +222,7 @@ export async function lookupTxHash(
   txHash: string,
   rpcUrl: string
 ): Promise<BridgeTxRecord | null> {
-  // Get tx details
+  // Get tx details — only check it goes to bridge contract
   const res = await fetch(`${rpcUrl}/rpc`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -234,8 +234,8 @@ export async function lookupTxHash(
   })
   const json = await res.json()
   const tx = json.result
-  if (!tx || tx.to !== OCTRA_BRIDGE_CONTRACT || tx.encrypted_data !== 'lock_to_eth') {
-    return null  // not a bridge tx
+  if (!tx || tx.to !== OCTRA_BRIDGE_CONTRACT) {
+    return null  // not to bridge contract
   }
 
   const [latestEpoch, receipt] = await Promise.all([
@@ -243,7 +243,8 @@ export async function lookupTxHash(
     getContractReceipt(txHash),
   ])
 
-  if (!receipt?.success) return null
+  // Validate via contract_receipt.method (more reliable than tx.encrypted_data)
+  if (!receipt?.success || receipt.method !== 'lock_to_eth') return null
 
   const lockedEvent = receipt.events.find((e: { event: string }) => e.event === 'Locked')
   if (!lockedEvent || lockedEvent.values.length < 4) return null

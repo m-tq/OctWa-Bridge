@@ -19,7 +19,7 @@ import { storePendingClaim } from '@/lib/pending-claims'
 import type { ethers } from 'ethers'
 
 const FEE_RESERVE_OCT  = 0.01   // OCT reserved for Octra tx fee
-const MIN_ETH_FOR_GAS  = 150_000 * 3 / 1e9  // 150k gas × 3 Gwei
+const MIN_ETH_FOR_GAS  = 130_000 * 2 / 1e9  // 130k gas × 2 Gwei
 
 interface BridgePanelProps {
   octraAddress?: string

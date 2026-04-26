@@ -1,4 +1,4 @@
-import { DEFAULT_OCTRA_RPC } from './constants'
+import { DEFAULT_OCTRA_RPC, OCTRA_BRIDGE_CONTRACT } from './constants'
 import type { OctraBalance, OctraTxResult } from './types'
 
 let rpcUrl = DEFAULT_OCTRA_RPC
@@ -223,4 +223,21 @@ export async function waitForConfirmation(
     await new Promise(r => setTimeout(r, intervalMs))
   }
   throw new Error('Transaction confirmation timeout')
+}
+
+/**
+ * Check if the bridge contract is paused.
+ * contract_call → is_paused → result.result: "0" = open, "1" = paused
+ */
+export async function isBridgePaused(): Promise<boolean> {
+  try {
+    const result = await rpc<{ result: string }>('contract_call', [
+      OCTRA_BRIDGE_CONTRACT,
+      'is_paused',
+      [],
+    ])
+    return result?.result === '1'
+  } catch {
+    return false // fail open — don't block users on RPC error
+  }
 }

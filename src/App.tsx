@@ -10,7 +10,9 @@ import { HistoryPanel } from './components/HistoryPanel'
 import { AboutPanel } from './components/AboutPanel'
 import { useWallets } from './hooks/useWallets'
 import { isBridgePaused } from './lib/octra-rpc'
-import { PauseCircle } from 'lucide-react'
+import { PauseCircle, AlertTriangle, FlaskConical } from 'lucide-react'
+
+const DISCLAIMER_KEY = 'bridge_disclaimer_accepted'
 
 const pageVariants = {
   initial: { opacity: 0, y: 16 },
@@ -18,10 +20,75 @@ const pageVariants = {
   exit: { opacity: 0, y: -12, transition: { duration: 0.25, ease: 'easeIn' } },
 }
 
+function DisclaimerModal({ onAccept }: { onAccept: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm px-4">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.96, y: 12 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        transition={{ duration: 0.3, ease: 'easeOut' }}
+        className="w-full max-w-sm border border-border bg-background p-6 flex flex-col gap-5"
+      >
+        {/* Header */}
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 flex-shrink-0">
+            <FlaskConical className="h-5 w-5 text-yellow-500" />
+          </div>
+          <div>
+            <h2 className="text-sm font-semibold leading-tight">Bridge — Experimental</h2>
+            <p className="text-[11px] text-muted-foreground mt-0.5">Please read before proceeding</p>
+          </div>
+        </div>
+
+        {/* Warning icon row */}
+        <div className="flex justify-center">
+          <AlertTriangle className="h-10 w-10 text-yellow-500 opacity-80" />
+        </div>
+
+        {/* Disclaimer items */}
+        <ul className="flex flex-col gap-2.5 text-xs text-muted-foreground">
+          <li className="flex items-start gap-2">
+            <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-yellow-500 flex-shrink-0" />
+            <span>
+              This bridge is <span className="text-foreground font-medium">experimental software</span>.
+              Use it entirely at your own risk.
+            </span>
+          </li>
+          <li className="flex items-start gap-2">
+            <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-yellow-500 flex-shrink-0" />
+            <span>
+              Always start with a <span className="text-foreground font-medium">small test amount</span> before
+              bridging larger sums.
+            </span>
+          </li>
+          <li className="flex items-start gap-2">
+            <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-yellow-500 flex-shrink-0" />
+            <span>
+              The developers are <span className="text-foreground font-medium">not responsible</span> for
+              any loss of funds resulting from the use of this bridge.
+            </span>
+          </li>
+        </ul>
+
+        {/* Accept button */}
+        <button
+          onClick={onAccept}
+          className="w-full py-2.5 bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 transition-opacity"
+        >
+          I Understand — Continue
+        </button>
+      </motion.div>
+    </div>
+  )
+}
+
 function AppContent() {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [activePage, setActivePage] = useState<SidebarPage>('bridge')
   const [bridgeStatus, setBridgeStatus] = useState<'checking' | 'open' | 'paused'>('checking')
+  const [disclaimerAccepted, setDisclaimerAccepted] = useState(
+    () => sessionStorage.getItem(DISCLAIMER_KEY) === '1'
+  )
 
   // Check bridge pause status on mount
   useEffect(() => {
@@ -29,6 +96,11 @@ function AppContent() {
       setBridgeStatus(paused ? 'paused' : 'open')
     })
   }, [])
+
+  const handleAcceptDisclaimer = () => {
+    sessionStorage.setItem(DISCLAIMER_KEY, '1')
+    setDisclaimerAccepted(true)
+  }
 
   const {
     octraAddress,
@@ -105,6 +177,11 @@ function AppContent() {
 
   return (
     <div className="app-layout">
+      {/* Disclaimer modal — shown once per session after bridge is confirmed open */}
+      {!disclaimerAccepted && (
+        <DisclaimerModal onAccept={handleAcceptDisclaimer} />
+      )}
+
       <Header
         connected={connected}
         loading={loading}

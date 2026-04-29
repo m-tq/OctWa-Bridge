@@ -105,7 +105,6 @@ function AppContent() {
   const {
     octraAddress,
     evmAddress,
-    ethSigner,
     octBalance,
     ethBalance,
     woctBalance,
@@ -207,7 +206,6 @@ function AppContent() {
               <BridgePanel
                 octraAddress={octraAddress}
                 evmAddress={evmAddress}
-                ethSigner={ethSigner}
                 octBalance={octBalance}
                 ethBalance={ethBalance}
                 woctBalance={woctBalance}

@@ -16,7 +16,7 @@ import {
   burnWoctToOctra,
 } from '@/lib/bridge-service'
 import { storePendingClaim } from '@/lib/pending-claims'
-import type { ethers } from 'ethers'
+import type { } from 'ethers'
 
 const FEE_RESERVE_OCT  = 0.01   // OCT reserved for Octra tx fee
 const MIN_ETH_FOR_GAS  = 130_000 * 2 / 1e9  // 130k gas × 2 Gwei
@@ -24,7 +24,6 @@ const MIN_ETH_FOR_GAS  = 130_000 * 2 / 1e9  // 130k gas × 2 Gwei
 interface BridgePanelProps {
   octraAddress?: string
   evmAddress?: string
-  ethSigner?: ethers.Signer
   octBalance?: string
   ethBalance?: string
   woctBalance?: string
@@ -65,7 +64,6 @@ const WOCT_TO_OCT_STEPS: { step: BridgeStep; label: string }[] = [
 export function BridgePanel({
   octraAddress,
   evmAddress,
-  ethSigner,
   octBalance,
   ethBalance,
   woctBalance,
@@ -129,8 +127,26 @@ export function BridgePanel({
 
     try {
       setStep('locking')
+
+      // Request capability for both send_transaction (lock) and send_evm_transaction (claim)
+      setProgressMsg('Requesting capability from OctWa...')
+      if (!window.octra) throw new Error('Octra extension not found')
+      const cap = await window.octra.requestCapability({
+        circle:    'oct-bridge',
+        appOrigin: window.location.origin,
+        methods:   ['send_transaction', 'send_evm_transaction'],
+        scope:     'write',
+        encrypted: false,
+      })
+
       setProgressMsg('Confirm the lock transaction in your OctWa wallet...')
-      const lockResult = await lockOctOnOctra({ octraAddress, ethRecipient: evmAddress, amountOct: amount })
+      const lockResult = await lockOctOnOctra({
+        octraAddress,
+        ethRecipient: evmAddress,
+        amountOct:    amount,
+        capabilityId: cap.id,
+        nonce:        cap.nonceBase + 1,
+      })
       setStep('waiting_epoch', { octraTxHash: lockResult.hash })
 
       const lockedData = await waitForLockedEvent(lockResult.hash, msg => setProgressMsg(msg))
@@ -139,15 +155,8 @@ export function BridgePanel({
       setProgressMsg(`Waiting for epoch ${lockedData.epoch} on Ethereum...`)
       await waitForEpochOnEth(lockedData.epoch, msg => setProgressMsg(msg))
 
-      setProgressMsg('Requesting write capability from OctWa...')
-      if (!window.octra) throw new Error('Octra extension not found')
-      const cap = await window.octra.requestCapability({
-        circle: 'oct-bridge', appOrigin: window.location.origin,
-        methods: ['send_evm_transaction'], scope: 'write', encrypted: false,
-      })
-
       setProgressMsg('Confirm the verifyAndMint transaction in OctWa...')
-      const ethHash = await claimWoctOnEthereum(lockedData, cap.id, Date.now())
+      const ethHash = await claimWoctOnEthereum(lockedData, cap.id, cap.nonceBase + 2)
 
       storePendingClaim(lockResult.hash, ethHash)
       setStep('done', { ethTxHash: ethHash })

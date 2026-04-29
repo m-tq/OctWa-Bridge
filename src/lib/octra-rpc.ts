@@ -87,7 +87,7 @@ export async function submitTx(tx: Record<string, unknown>): Promise<string> {
 }
 
 export async function getRecommendedFee(): Promise<number> {
-  const result = await rpc<{ recommended: number | string }>('octra_recommendedFee', ['contract_call'])
+  const result = await rpc<{ recommended: number | string }>('octra_recommendedFee', ['call'])
   return typeof result.recommended === 'string' ? parseInt(result.recommended, 10) : result.recommended
 }
 

@@ -55,34 +55,80 @@ import {
 import type { LockedEventData, OctraTxResult } from './types'
 import { toRawUnits } from './utils'
 
+// ─── Shared helper ────────────────────────────────────────────────────────────
+
+/**
+ * Extract txHash from an invoke result.data which can be:
+ *   - Uint8Array (JSON-encoded)
+ *   - string (JSON or raw hash)
+ *   - object with numeric keys {0:123,...} (serialized Uint8Array)
+ *   - plain object { txHash, hash }
+ */
+function extractTxHash(raw: unknown): string | null {
+  let jsonStr: string | null = null
+
+  if (raw instanceof Uint8Array) {
+    jsonStr = new TextDecoder().decode(raw)
+  } else if (typeof raw === 'string') {
+    jsonStr = raw
+  } else if (raw && typeof raw === 'object') {
+    const keys = Object.keys(raw as Record<string, unknown>)
+    if (keys.length > 0 && keys.every(k => /^\d+$/.test(k))) {
+      // Numeric-keyed object — serialized Uint8Array
+      const obj = raw as Record<string, number>
+      const bytes = new Uint8Array(keys.length)
+      keys.sort((a, b) => Number(a) - Number(b)).forEach((k, i) => { bytes[i] = obj[k] })
+      jsonStr = new TextDecoder().decode(bytes)
+    } else {
+      const d = raw as Record<string, unknown>
+      return (d?.txHash as string) || (d?.hash as string) || null
+    }
+  }
+
+  if (jsonStr) {
+    try {
+      const parsed = JSON.parse(jsonStr)
+      return parsed.txHash || parsed.hash || null
+    } catch {
+      return jsonStr.trim() || null
+    }
+  }
+
+  return null
+}
+
 // ─── OCT → wOCT ──────────────────────────────────────────────────────────────
 
 /**
  * Step 1: Lock OCT on Octra
  *
- * Contract call tx format (verified from sample tx 5c6712...):
- *   from:           sender address
- *   to_:            bridge contract address
- *   amount:         raw units string (e.g. "1992000000")
- *   nonce:          int
- *   ou:             fee string
- *   timestamp:      float (seconds)
- *   op_type:        "call"
- *   encrypted_data: "lock_to_eth"          ← method name goes here
- *   message:        "[\"0xETH_ADDRESS\"]"  ← params as JSON array string
- *   signature:      base64 ed25519
- *   public_key:     base64
+ * Uses window.octra.invoke with method 'send_transaction'.
+ * The extension's DAppRequestHandler handles the actual signing and submission:
+ *   1. Fetches fresh nonce from chain
+ *   2. Creates and signs the transaction with Ed25519
+ *   3. Submits via octra_submit RPC
+ *   4. Returns { txHash }
  *
- * Canonical JSON for signing (from tx_builder.hpp):
- *   { from, to_, amount, nonce, ou, timestamp, op_type, encrypted_data, message }
- *   NOTE: encrypted_data IS included in canonical signing when non-empty
+ * Payload: { to, amount, message }
+ *   - to:      bridge contract address
+ *   - amount:  OCT amount (float, e.g. 1.5)
+ *   - message: JSON-encoded method call, e.g. '["lock_to_eth","0xETH_ADDRESS"]'
+ *              The bridge contract reads op_type='call', encrypted_data='lock_to_eth',
+ *              message='["0xETH_ADDRESS"]' — we encode both in message for the extension.
+ *
+ * NOTE: The extension's send_transaction handler uses createTransaction() which sets:
+ *   op_type:        'standard' by default
+ * For a contract call we need op_type='call' and encrypted_data='lock_to_eth'.
+ * We pass these as extra fields in the payload so DAppRequestHandler can forward them.
  */
 export async function lockOctOnOctra(params: {
   octraAddress: string
   ethRecipient: string
   amountOct: string
+  capabilityId: string
+  nonce: number
 }): Promise<OctraTxResult> {
-  const { octraAddress, ethRecipient, amountOct } = params
+  const { octraAddress, ethRecipient, amountOct, capabilityId, nonce } = params
 
   if (!window.octra) throw new Error('Octra wallet extension not found')
   if (!ethers.isAddress(ethRecipient)) throw new Error('Invalid Ethereum address')
@@ -90,55 +136,44 @@ export async function lockOctOnOctra(params: {
   const rawAmount = toRawUnits(amountOct, OCT_DECIMALS)
   if (rawAmount <= 0n) throw new Error('Amount must be greater than 0')
 
-  const [nonce, fee] = await Promise.all([
-    getNonce(octraAddress),
-    getRecommendedFee(),
-  ])
-
-  const txNonce = nonce + 1
-  const timestamp = Date.now() / 1000
-
-  // Canonical fields for signing — exact order from tx_builder.hpp canonical_json()
-  const canonicalTx: Record<string, unknown> = {
-    from:           octraAddress,
-    to_:            OCTRA_BRIDGE_CONTRACT,
-    amount:         rawAmount.toString(),
-    nonce:          txNonce,
-    ou:             fee.toString(),
-    timestamp,
+  // Payload for send_transaction — extension parses this as TransactionPayload
+  // We include op_type and contract call fields so the extension can build the correct tx
+  const payloadBytes = new TextEncoder().encode(JSON.stringify({
+    to:             OCTRA_BRIDGE_CONTRACT,
+    amount:         parseFloat(amountOct),
+    // message field carries the contract method params as JSON array string
+    // The extension passes this as tx.message → node reads it as contract call params
+    message:        JSON.stringify([ethRecipient]),
+    // Extra fields for contract call — extension should forward these
     op_type:        'call',
-    encrypted_data: OCTRA_LOCK_METHOD,          // method name
-    message:        JSON.stringify([ethRecipient]), // params as JSON array string
-  }
+    encrypted_data: OCTRA_LOCK_METHOD,
+  }))
 
-  // Sign canonical JSON via wallet extension (opens popup for user approval)
-  const signingData = JSON.stringify(canonicalTx)
-  console.log('[Bridge] nonce:', nonce, '→ txNonce:', txNonce)
-  console.log('[Bridge] fee:', fee)
-  console.log('[Bridge] rawAmount:', rawAmount.toString())
-  console.log('[Bridge] signingData:', signingData)
+  const result = await window.octra.invoke({
+    header: {
+      version:    2,
+      circleId:   'oct-bridge',
+      branchId:   'main',
+      epoch:      0,
+      nonce,
+      timestamp:  Date.now(),
+      originHash: '',
+    },
+    payload: payloadBytes,
+    body: {
+      capabilityId,
+      method:      'send_transaction',
+      payloadHash: '',
+    },
+  })
 
-  const signature = await window.octra.signMessage(signingData)
-  if (!signature) throw new Error('Wallet rejected signing')
-  console.log('[Bridge] signature:', signature)
+  if (!result.success) throw new Error(result.error || 'Wallet rejected lock transaction')
 
-  // Get public key — must match the wallet that signed
-  const pubKey = await getPublicKey(octraAddress)
-  console.log('[Bridge] pubKey from RPC:', pubKey)
-  if (!pubKey) throw new Error(
-    `Could not fetch public key for ${octraAddress}. ` +
-    'Make sure this wallet has been registered on Octra (has sent at least one transaction).'
-  )
+  // Extract txHash from result
+  const txHash = extractTxHash(result.data)
+  if (!txHash) throw new Error('No txHash returned from lock transaction')
 
-  // Full tx object to submit (includes signature + public_key)
-  const signedTx = {
-    ...canonicalTx,
-    signature,
-    public_key: pubKey,
-  }
-
-  const hash = await submitTx(signedTx)
-  return { hash }
+  return { hash: txHash }
 }
 
 /**
@@ -383,43 +418,9 @@ export async function sendEvmContractCall(params: {
 
   if (!result.success) throw new Error(result.error || 'EVM tx rejected by wallet')
 
-  // Extract txHash — result.data can be:
-  //   Uint8Array, string, or object with numeric keys {0:123, 1:34, ...} (serialized Uint8Array)
-  let txHash: string
-  const raw = result.data
-
-  let jsonStr: string | null = null
-
-  if (raw instanceof Uint8Array) {
-    jsonStr = new TextDecoder().decode(raw)
-  } else if (typeof raw === 'string') {
-    jsonStr = raw
-  } else if (raw && typeof raw === 'object') {
-    // Numeric-keyed object {0: 123, 1: 34, ...} — convert to Uint8Array
-    const keys = Object.keys(raw as Record<string, unknown>)
-    if (keys.length > 0 && keys.every(k => /^\d+$/.test(k))) {
-      const obj = raw as Record<string, number>
-      const bytes = new Uint8Array(keys.length)
-      keys.sort((a, b) => Number(a) - Number(b)).forEach((k, i) => { bytes[i] = obj[k] })
-      jsonStr = new TextDecoder().decode(bytes)
-    } else {
-      // Already parsed object
-      const d = raw as Record<string, unknown>
-      txHash = (d?.txHash as string) || (d?.hash as string) || ''
-    }
-  }
-
-  if (jsonStr) {
-    try {
-      const parsed = JSON.parse(jsonStr)
-      txHash = parsed.txHash || parsed.hash || ''
-    } catch {
-      txHash = jsonStr.trim()
-    }
-  }
-
-  if (!txHash!) throw new Error('No txHash returned from EVM transaction')
-  return txHash!
+  const txHash = extractTxHash(result.data)
+  if (!txHash) throw new Error('No txHash returned from EVM transaction')
+  return txHash
 }
 
 // ─── wOCT → OCT ──────────────────────────────────────────────────────────────

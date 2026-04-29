@@ -8,7 +8,6 @@ const ETH_MAINNET_RPC = `https://mainnet.infura.io/v3/${INFURA_KEY}`
 export interface WalletState {
   octraAddress?: string
   evmAddress?: string
-  ethSigner?: ethers.Signer
   ethProvider?: ethers.JsonRpcProvider
   octBalance?: string
   ethBalance?: string
@@ -16,6 +15,8 @@ export interface WalletState {
   loading: boolean
   balanceLoading: boolean
   connected: boolean
+  /** Non-null when a connection error should be shown to the user */
+  connectError: string | null
 }
 
 export function useWallets() {
@@ -23,7 +24,12 @@ export function useWallets() {
     loading: false,
     balanceLoading: false,
     connected: false,
+    connectError: null,
   })
+
+  const clearError = useCallback(() => {
+    setState(s => ({ ...s, connectError: null }))
+  }, [])
 
   /**
    * Connect via Octra wallet extension (window.octra).
@@ -32,18 +38,20 @@ export function useWallets() {
    *   - walletPubKey: Octra address
    *   - evmAddress:   Ethereum address derived from the same key
    *
-   * We create a read-only ethers provider for balance queries.
-   * All EVM transactions go through window.octra.invoke('send_evm_transaction')
-   * — the extension holds the private key and signs internally.
+   * We create a read-only ethers provider for balance queries only.
+   * All EVM transactions go through window.octra.invoke('send_evm_transaction').
    */
   const connect = useCallback(async () => {
     if (!window.octra) {
-      alert('Octra wallet extension not found. Please install OctWa.')
+      setState(s => ({
+        ...s,
+        connectError: 'Octra wallet extension not found. Please install OctWa.',
+      }))
       return
     }
 
     try {
-      setState(s => ({ ...s, loading: true }))
+      setState(s => ({ ...s, loading: true, connectError: null }))
 
       // Disconnect first to clear any cached connection
       try { await window.octra.disconnect() } catch { /* ignore */ }
@@ -66,8 +74,7 @@ export function useWallets() {
 
       console.log('[Bridge] Connected:', { octraAddress, evmAddress, epoch: conn.epoch })
 
-      // Read-only provider — only used for balance queries and fee data.
-      // Actual EVM transactions are signed by the extension via invoke.
+      // Read-only provider — only used for balance queries.
       const provider = new ethers.JsonRpcProvider(ETH_MAINNET_RPC)
 
       setState(s => ({
@@ -78,6 +85,7 @@ export function useWallets() {
         connected:   true,
         loading:     false,
         balanceLoading: true,
+        connectError: null,
         octBalance:  undefined,
         ethBalance:  undefined,
         woctBalance: undefined,
@@ -87,8 +95,11 @@ export function useWallets() {
       setState(s => ({ ...s, balanceLoading: false }))
     } catch (err) {
       console.error('[Bridge] Connect failed:', err)
-      setState(s => ({ ...s, loading: false }))
-      alert(`Connection failed: ${err instanceof Error ? err.message : String(err)}`)
+      setState(s => ({
+        ...s,
+        loading: false,
+        connectError: err instanceof Error ? err.message : String(err),
+      }))
     }
   }, [])
 
@@ -98,6 +109,7 @@ export function useWallets() {
       loading: false,
       balanceLoading: false,
       connected: false,
+      connectError: null,
       octBalance: undefined,
       ethBalance: undefined,
       woctBalance: undefined,
@@ -138,5 +150,6 @@ export function useWallets() {
     connect,
     disconnect,
     refreshBalances,
+    clearError,
   }
 }

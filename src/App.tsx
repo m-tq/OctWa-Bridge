@@ -10,7 +10,7 @@ import { HistoryPanel } from './components/HistoryPanel'
 import { AboutPanel } from './components/AboutPanel'
 import { useWallets } from './hooks/useWallets'
 import { isBridgePaused } from './lib/octra-rpc'
-import { PauseCircle, AlertTriangle, FlaskConical } from 'lucide-react'
+import { PauseCircle, AlertTriangle, FlaskConical, X } from 'lucide-react'
 
 const DISCLAIMER_KEY = 'bridge_disclaimer_accepted'
 
@@ -111,9 +111,11 @@ function AppContent() {
     connected,
     loading,
     balanceLoading,
+    connectError,
     connect,
     disconnect,
     refreshBalances,
+    clearError,
   } = useWallets()
 
   // Fullscreen pause notice
@@ -179,6 +181,40 @@ function AppContent() {
       {/* Disclaimer modal — shown once per session after bridge is confirmed open */}
       {!disclaimerAccepted && (
         <DisclaimerModal onAccept={handleAcceptDisclaimer} />
+      )}
+
+      {/* Connection error modal */}
+      {connectError && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm px-4">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.96, y: 12 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            transition={{ duration: 0.25, ease: 'easeOut' }}
+            className="w-full max-w-sm border border-destructive/40 bg-background p-6 flex flex-col gap-4"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
+                <div>
+                  <h2 className="text-sm font-semibold">Connection Failed</h2>
+                  <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{connectError}</p>
+                </div>
+              </div>
+              <button
+                onClick={clearError}
+                className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <button
+              onClick={clearError}
+              className="w-full py-2 border border-border text-sm hover:bg-muted transition-colors"
+            >
+              Dismiss
+            </button>
+          </motion.div>
+        </div>
       )}
 
       <Header

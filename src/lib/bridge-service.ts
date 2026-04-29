@@ -45,12 +45,8 @@ import {
 } from './constants'
 import {
   getBalance,
-  getNonce,
-  getRecommendedFee,
   waitForConfirmation,
   getContractReceipt,
-  getPublicKey,
-  submitTx,
 } from './octra-rpc'
 import type { LockedEventData, OctraTxResult } from './types'
 import { toRawUnits } from './utils'
@@ -102,33 +98,22 @@ function extractTxHash(raw: unknown): string | null {
 /**
  * Step 1: Lock OCT on Octra
  *
- * Contract call tx format (verified from sample tx 5c6712...):
- *   from:           sender address
- *   to_:            bridge contract address
- *   amount:         raw units string (e.g. "1992000000")
- *   nonce:          int
- *   ou:             fee string
- *   timestamp:      float (seconds)
- *   op_type:        "call"
- *   encrypted_data: "lock_to_eth"          ← method name goes here
- *   message:        "[\"0xETH_ADDRESS\"]"  ← params as JSON array string
- *   signature:      base64 ed25519
- *   public_key:     base64
+ * Uses window.octra.invoke with method 'send_transaction'.
+ * DAppRequestHandler handles signing and submission — it now reads
+ * op_type and encrypted_data from the payload and passes them to
+ * createTransaction(), so the canonical JSON is built correctly for
+ * a contract call (op_type='call', encrypted_data='lock_to_eth').
  *
- * Canonical JSON for signing (from tx_builder.hpp):
- *   { from, to_, amount, nonce, ou, timestamp, op_type, encrypted_data, message }
- *   NOTE: encrypted_data IS included in canonical signing when non-empty
- *
- * Uses window.octra.signMessage() to sign the canonical JSON — this opens
- * the wallet's sign message popup for user approval, then submits directly
- * via Octra RPC. No invoke/capability needed for Octra-side transactions.
+ * Payload: { to, amount, message, op_type, encrypted_data }
  */
 export async function lockOctOnOctra(params: {
   octraAddress: string
   ethRecipient: string
   amountOct: string
+  capabilityId: string
+  nonce: number
 }): Promise<OctraTxResult> {
-  const { octraAddress, ethRecipient, amountOct } = params
+  const { octraAddress, ethRecipient, amountOct, capabilityId, nonce } = params
 
   if (!window.octra) throw new Error('Octra wallet extension not found')
   if (!ethers.isAddress(ethRecipient)) throw new Error('Invalid Ethereum address')
@@ -136,52 +121,38 @@ export async function lockOctOnOctra(params: {
   const rawAmount = toRawUnits(amountOct, OCT_DECIMALS)
   if (rawAmount <= 0n) throw new Error('Amount must be greater than 0')
 
-  const [nonce, fee] = await Promise.all([
-    getNonce(octraAddress),
-    getRecommendedFee(),
-  ])
-
-  const txNonce = nonce + 1
-  const timestamp = Date.now() / 1000
-
-  // Canonical fields for signing — exact order from tx_builder.hpp canonical_json()
-  const canonicalTx: Record<string, unknown> = {
-    from:           octraAddress,
-    to_:            OCTRA_BRIDGE_CONTRACT,
-    amount:         rawAmount.toString(),
-    nonce:          txNonce,
-    ou:             fee.toString(),
-    timestamp,
+  const payloadBytes = new TextEncoder().encode(JSON.stringify({
+    to:             OCTRA_BRIDGE_CONTRACT,
+    amount:         parseFloat(amountOct),
+    message:        JSON.stringify([ethRecipient]), // contract params
     op_type:        'call',
-    encrypted_data: OCTRA_LOCK_METHOD,             // method name
-    message:        JSON.stringify([ethRecipient]), // params as JSON array string
-  }
+    encrypted_data: OCTRA_LOCK_METHOD,             // 'lock_to_eth'
+  }))
 
-  // Sign canonical JSON via wallet extension — opens sign message popup
-  const signingData = JSON.stringify(canonicalTx)
-  console.log('[Bridge] nonce:', nonce, '→ txNonce:', txNonce)
-  console.log('[Bridge] fee:', fee)
-  console.log('[Bridge] rawAmount:', rawAmount.toString())
+  const result = await window.octra.invoke({
+    header: {
+      version:    2,
+      circleId:   'oct-bridge',
+      branchId:   'main',
+      epoch:      0,
+      nonce,
+      timestamp:  Date.now(),
+      originHash: '',
+    },
+    payload: payloadBytes,
+    body: {
+      capabilityId,
+      method:      'send_transaction',
+      payloadHash: '',
+    },
+  })
 
-  const signature = await window.octra.signMessage(signingData)
-  if (!signature) throw new Error('Wallet rejected signing')
+  if (!result.success) throw new Error(result.error || 'Wallet rejected lock transaction')
 
-  // Get public key — must match the wallet that signed
-  const pubKey = await getPublicKey(octraAddress)
-  if (!pubKey) throw new Error(
-    `Could not fetch public key for ${octraAddress}. ` +
-    'Make sure this wallet has been registered on Octra (has sent at least one transaction).'
-  )
+  const txHash = extractTxHash(result.data)
+  if (!txHash) throw new Error('No txHash returned from lock transaction')
 
-  // Full tx object to submit (includes signature + public_key)
-  const signedTx = {
-    ...canonicalTx,
-    signature,
-    public_key: pubKey,
-  }
-
-  const hash = await submitTx(signedTx)
-  return { hash }
+  return { hash: txHash }
 }
 
 /**

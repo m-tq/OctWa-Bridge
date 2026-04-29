@@ -128,13 +128,14 @@ export function BridgePanel({
     try {
       setStep('locking')
 
-      // Request capability for both send_transaction (lock) and send_evm_transaction (claim)
+      // Request capability for EVM transaction (verifyAndMint claim)
+      // Octra lock_to_eth uses signMessage directly — no capability needed
       setProgressMsg('Requesting capability from OctWa...')
       if (!window.octra) throw new Error('Octra extension not found')
       const cap = await window.octra.requestCapability({
         circle:    'oct-bridge',
         appOrigin: window.location.origin,
-        methods:   ['send_transaction', 'send_evm_transaction'],
+        methods:   ['send_evm_transaction'],
         scope:     'write',
         encrypted: false,
       })
@@ -144,8 +145,6 @@ export function BridgePanel({
         octraAddress,
         ethRecipient: evmAddress,
         amountOct:    amount,
-        capabilityId: cap.id,
-        nonce:        cap.nonceBase + 1,
       })
       setStep('waiting_epoch', { octraTxHash: lockResult.hash })
 
@@ -156,7 +155,7 @@ export function BridgePanel({
       await waitForEpochOnEth(lockedData.epoch, msg => setProgressMsg(msg))
 
       setProgressMsg('Confirm the verifyAndMint transaction in OctWa...')
-      const ethHash = await claimWoctOnEthereum(lockedData, cap.id, cap.nonceBase + 2)
+      const ethHash = await claimWoctOnEthereum(lockedData, cap.id, cap.nonceBase + 1)
 
       storePendingClaim(lockResult.hash, ethHash)
       setStep('done', { ethTxHash: ethHash })

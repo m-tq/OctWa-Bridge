@@ -22,6 +22,12 @@ const pageVariants = {
 interface HistoryPanelProps {
   octraAddress?: string
   evmAddress?: string
+  onRequestCapability: (params: {
+    methods: string[]
+    scope: 'read' | 'write' | 'compute'
+    encrypted: boolean
+    ttlSeconds?: number
+  }) => Promise<import('@octwa/sdk').Capability>
 }
 
 const STATUS_LABEL: Record<BridgeTxRecord['claimStatus'], string> = {
@@ -38,7 +44,7 @@ const STATUS_CLASS: Record<BridgeTxRecord['claimStatus'], string> = {
   unknown:       'text-muted-foreground border-border',
 }
 
-export function HistoryPanel({ octraAddress, evmAddress }: HistoryPanelProps) {
+export function HistoryPanel({ octraAddress, evmAddress, onRequestCapability }: HistoryPanelProps) {
   const [records, setRecords]       = useState<BridgeTxRecord[]>([])
   const [burnRecords, setBurnRecords] = useState<BurnRecord[]>([])
   const [loading, setLoading]       = useState(false)
@@ -118,9 +124,10 @@ export function HistoryPanel({ octraAddress, evmAddress }: HistoryPanelProps) {
       }
 
       setClaimProg(p => ({ ...p, [rec.octraTxHash]: 'Requesting capability...' }))
-      const cap = await window.octra.requestCapability({
-        circle: 'oct-bridge', appOrigin: window.location.origin,
-        methods: ['send_evm_transaction'], scope: 'write', encrypted: false,
+      const cap = await onRequestCapability({
+        methods:   ['send_evm_transaction'],
+        scope:     'write',
+        encrypted: false,
       })
 
       setClaimProg(p => ({ ...p, [rec.octraTxHash]: 'Confirm in OctWa...' }))

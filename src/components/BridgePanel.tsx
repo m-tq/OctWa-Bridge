@@ -30,6 +30,12 @@ interface BridgePanelProps {
   balanceLoading?: boolean
   onRefreshBalances: () => void
   onConnect: () => void
+  onRequestCapability: (params: {
+    methods: string[]
+    scope: 'read' | 'write' | 'compute'
+    encrypted: boolean
+    ttlSeconds?: number
+  }) => Promise<import('@octwa/sdk').Capability>
 }
 
 const STEP_LABELS: Record<BridgeStep, string> = {
@@ -70,6 +76,7 @@ export function BridgePanel({
   balanceLoading,
   onRefreshBalances,
   onConnect,
+  onRequestCapability,
 }: BridgePanelProps) {
   const [direction, setDirection] = useState<BridgeDirection>('oct-to-woct')
   const [amount, setAmount]       = useState('')
@@ -130,10 +137,7 @@ export function BridgePanel({
 
       // Request capability for both Octra lock (send_transaction) and EVM claim (send_evm_transaction)
       setProgressMsg('Requesting capability from OctWa...')
-      if (!window.octra) throw new Error('Octra extension not found')
-      const cap = await window.octra.requestCapability({
-        circle:    'oct-bridge',
-        appOrigin: window.location.origin,
+      const cap = await onRequestCapability({
         methods:   ['send_transaction', 'send_evm_transaction'],
         scope:     'write',
         encrypted: false,
@@ -176,10 +180,10 @@ export function BridgePanel({
     try {
       setStep('burning')
       setProgressMsg('Requesting write capability from OctWa...')
-      if (!window.octra) throw new Error('Octra extension not found')
-      const cap = await window.octra.requestCapability({
-        circle: 'oct-bridge', appOrigin: window.location.origin,
-        methods: ['send_evm_transaction'], scope: 'write', encrypted: false,
+      const cap = await onRequestCapability({
+        methods:   ['send_evm_transaction'],
+        scope:     'write',
+        encrypted: false,
       })
 
       setProgressMsg('Confirm the burnToOctra transaction in OctWa...')

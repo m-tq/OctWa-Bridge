@@ -115,6 +115,7 @@ function AppContent() {
     connect,
     disconnect,
     refreshBalances,
+    requestCapability,
     clearError,
   } = useWallets()
 
@@ -248,12 +249,17 @@ function AppContent() {
                 balanceLoading={balanceLoading}
                 onRefreshBalances={refreshBalances}
                 onConnect={connect}
+                onRequestCapability={requestCapability}
               />
             </motion.div>
           )}
           {activePage === 'history' && (
             <motion.div key="history" variants={pageVariants} initial="initial" animate="animate" exit="exit" className="w-full h-full">
-              <HistoryPanel octraAddress={octraAddress} evmAddress={evmAddress} />
+              <HistoryPanel
+                octraAddress={octraAddress}
+                evmAddress={evmAddress}
+                onRequestCapability={requestCapability}
+              />
             </motion.div>
           )}
           {activePage === 'about' && (

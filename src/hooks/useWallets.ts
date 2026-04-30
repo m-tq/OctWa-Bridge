@@ -1,5 +1,7 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import { ethers } from 'ethers'
+import { OctraSDK } from '@octwa/sdk'
+import type { Capability } from '@octwa/sdk'
 import { getOctBalance, getWoctBalance } from '@/lib/bridge-service'
 
 const INFURA_KEY = import.meta.env.VITE_INFURA_API_KEY || '121cf128273c4f0cb73770b391070d3b'
@@ -19,6 +21,18 @@ export interface WalletState {
   connectError: string | null
 }
 
+/**
+ * useWallets — manages OctWa wallet connection for the bridge.
+ *
+ * Uses @octwa/sdk for:
+ *   - Provider detection (octraLoaded + octra:announceProvider)
+ *   - connect() / disconnect() lifecycle
+ *   - requestCapability() — exposed so BridgePanel/HistoryPanel can use it
+ *
+ * bridge-service.ts still calls window.octra.invoke() directly because
+ * it needs full control over the SignedInvocation payload structure for
+ * contract calls (op_type, encrypted_data, etc.).
+ */
 export function useWallets() {
   const [state, setState] = useState<WalletState>({
     loading: false,
@@ -27,37 +41,54 @@ export function useWallets() {
     connectError: null,
   })
 
+  // SDK instance — initialized once on first connect
+  const sdkRef = useRef<OctraSDK | null>(null)
+
   const clearError = useCallback(() => {
     setState(s => ({ ...s, connectError: null }))
   }, [])
 
   /**
-   * Connect via Octra wallet extension (window.octra).
+   * Get or initialize the SDK instance.
+   * Waits up to 3s for the extension to be detected.
+   */
+  const getSDK = useCallback(async (): Promise<OctraSDK> => {
+    if (sdkRef.current) return sdkRef.current
+    const sdk = await OctraSDK.init({ timeout: 3000 })
+    sdkRef.current = sdk
+    return sdk
+  }, [])
+
+  /**
+   * Connect via OctWa extension using @octwa/sdk.
    *
-   * The extension returns:
-   *   - walletPubKey: Octra address
-   *   - evmAddress:   Ethereum address derived from the same key
+   * SDK handles:
+   *   - Extension detection (octraLoaded + octra:announceProvider)
+   *   - connect() → Connection (walletPubKey, evmAddress, epoch, branchId)
    *
-   * We create a read-only ethers provider for balance queries only.
-   * All EVM transactions go through window.octra.invoke('send_evm_transaction').
+   * We create a read-only ethers provider for ETH/wOCT balance queries.
+   * All transactions go through window.octra.invoke() in bridge-service.ts.
    */
   const connect = useCallback(async () => {
-    if (!window.octra) {
-      setState(s => ({
-        ...s,
-        connectError: 'Octra wallet extension not found. Please install OctWa.',
-      }))
-      return
-    }
-
     try {
       setState(s => ({ ...s, loading: true, connectError: null }))
 
+      const sdk = await getSDK()
+
+      if (!sdk.isInstalled()) {
+        setState(s => ({
+          ...s,
+          loading: false,
+          connectError: 'Octra wallet extension not found. Please install OctWa.',
+        }))
+        return
+      }
+
       // Disconnect first to clear any cached connection
-      try { await window.octra.disconnect() } catch { /* ignore */ }
+      try { await sdk.disconnect() } catch { /* ignore */ }
       await new Promise(r => setTimeout(r, 200))
 
-      const conn = await window.octra.connect({
+      const conn = await sdk.connect({
         circle:    'oct-bridge',
         appOrigin: window.location.origin,
         appName:   'OctWa Bridge',
@@ -72,23 +103,28 @@ export function useWallets() {
         )
       }
 
-      console.log('[Bridge] Connected:', { octraAddress, evmAddress, epoch: conn.epoch })
+      console.log('[Bridge] Connected via SDK:', {
+        octraAddress,
+        evmAddress,
+        epoch:    conn.epoch,
+        branchId: conn.branchId,
+      })
 
-      // Read-only provider — only used for balance queries.
+      // Read-only provider — only used for ETH/wOCT balance queries.
       const provider = new ethers.JsonRpcProvider(ETH_MAINNET_RPC)
 
       setState(s => ({
         ...s,
         octraAddress,
         evmAddress,
-        ethProvider: provider,
-        connected:   true,
-        loading:     false,
+        ethProvider:    provider,
+        connected:      true,
+        loading:        false,
         balanceLoading: true,
-        connectError: null,
-        octBalance:  undefined,
-        ethBalance:  undefined,
-        woctBalance: undefined,
+        connectError:   null,
+        octBalance:     undefined,
+        ethBalance:     undefined,
+        woctBalance:    undefined,
       }))
 
       await refreshBalancesInternal(octraAddress, evmAddress, provider)
@@ -97,24 +133,46 @@ export function useWallets() {
       console.error('[Bridge] Connect failed:', err)
       setState(s => ({
         ...s,
-        loading: false,
+        loading:      false,
         connectError: err instanceof Error ? err.message : String(err),
       }))
     }
-  }, [])
+  }, [getSDK])
 
   const disconnect = useCallback(async () => {
-    try { await window.octra?.disconnect() } catch { /* ignore */ }
+    try {
+      const sdk = sdkRef.current
+      if (sdk) await sdk.disconnect()
+    } catch { /* ignore */ }
     setState({
-      loading: false,
+      loading:        false,
       balanceLoading: false,
-      connected: false,
-      connectError: null,
-      octBalance: undefined,
-      ethBalance: undefined,
-      woctBalance: undefined,
+      connected:      false,
+      connectError:   null,
+      octBalance:     undefined,
+      ethBalance:     undefined,
+      woctBalance:    undefined,
     })
   }, [])
+
+  /**
+   * Request a capability via SDK.
+   * Exposed so BridgePanel and HistoryPanel can use it instead of
+   * calling window.octra.requestCapability() directly.
+   */
+  const requestCapability = useCallback(async (params: {
+    methods: string[]
+    scope: 'read' | 'write' | 'compute'
+    encrypted: boolean
+    ttlSeconds?: number
+  }): Promise<Capability> => {
+    const sdk = await getSDK()
+    if (!sdk.isInstalled()) throw new Error('OctWa extension not found')
+    return sdk.requestCapability({
+      circle:    'oct-bridge',
+      ...params,
+    })
+  }, [getSDK])
 
   const refreshBalancesInternal = async (
     octraAddr: string,
@@ -150,6 +208,7 @@ export function useWallets() {
     connect,
     disconnect,
     refreshBalances,
+    requestCapability,
     clearError,
   }
 }

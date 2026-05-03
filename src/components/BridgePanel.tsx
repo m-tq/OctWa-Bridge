@@ -4,7 +4,7 @@ import {
   ArrowRight, ArrowLeftRight,
   Loader2, CheckCircle2, XCircle,
   ExternalLink, Copy, RefreshCw,
-  Wallet, RefreshCw as RefreshIcon,
+  Wallet,
 } from 'lucide-react'
 import { cn, shortenAddress } from '@/lib/utils'
 import type { BridgeDirection, BridgeStep, BridgeState } from '@/lib/types'
@@ -16,10 +16,10 @@ import {
   burnWoctToOctra,
 } from '@/lib/bridge-service'
 import { storePendingClaim } from '@/lib/pending-claims'
-import type { } from 'ethers'
+import type { Capability } from '@octwa/sdk'
 
-const FEE_RESERVE_OCT  = 0.01   // OCT reserved for Octra tx fee
-const MIN_ETH_FOR_GAS  = 130_000 * 2 / 1e9  // 130k gas × 2 Gwei
+const FEE_RESERVE_OCT = 0.01
+const MIN_ETH_FOR_GAS = (130_000 * 2) / 1e9
 
 interface BridgePanelProps {
   octraAddress?: string
@@ -35,7 +35,7 @@ interface BridgePanelProps {
     scope: 'read' | 'write' | 'compute'
     encrypted: boolean
     ttlSeconds?: number
-  }) => Promise<import('@octwa/sdk').Capability>
+  }) => Promise<Capability>
 }
 
 const STEP_LABELS: Record<BridgeStep, string> = {
@@ -92,7 +92,6 @@ export function BridgePanel({
   const isError     = state.step === 'error'
   const isConnected = !!octraAddress && !!evmAddress
 
-  // ── Balances & validation ─────────────────────────────────────────────────
   const octBalanceNum  = octBalance  ? parseFloat(octBalance)  : 0
   const woctBalanceNum = woctBalance ? parseFloat(woctBalance) : 0
   const ethBalanceNum  = ethBalance  ? parseFloat(ethBalance)  : 0
@@ -123,19 +122,19 @@ export function BridgePanel({
     if (maxAmount > 0) setAmount(maxAmount.toFixed(6))
   }
 
-  const setStep = (step: BridgeStep, extra?: Partial<Omit<BridgeState, 'direction' | 'step' | 'amount' | 'octraAddress' | 'ethAddress'>>) => {
+  const setStep = (
+    step: BridgeStep,
+    extra?: Partial<Omit<BridgeState, 'direction' | 'step' | 'amount' | 'octraAddress' | 'ethAddress'>>
+  ) => {
     setState(s => ({ ...s, step, ...extra }))
   }
 
-  // ── OCT → wOCT ───────────────────────────────────────────────────────────
   const handleOctToWoct = useCallback(async () => {
     if (!octraAddress || !evmAddress) return
     setState({ direction: 'oct-to-woct', step: 'idle', amount, octraAddress, ethAddress: evmAddress })
 
     try {
       setStep('locking')
-
-      // Request capability for both Octra lock (send_transaction) and EVM claim (send_evm_transaction)
       setProgressMsg('Requesting capability from OctWa...')
       const cap = await onRequestCapability({
         methods:   ['send_transaction', 'send_evm_transaction'],
@@ -170,9 +169,8 @@ export function BridgePanel({
       setStep('error', { error: err instanceof Error ? err.message : String(err) })
       setProgressMsg('')
     }
-  }, [amount, octraAddress, evmAddress, onRefreshBalances])
+  }, [amount, octraAddress, evmAddress, onRefreshBalances, onRequestCapability])
 
-  // ── wOCT → OCT ───────────────────────────────────────────────────────────
   const handleWoctToOct = useCallback(async () => {
     if (!octraAddress || !evmAddress) return
     setState({ direction: 'woct-to-oct', step: 'idle', amount, octraAddress, ethAddress: evmAddress })
@@ -196,8 +194,6 @@ export function BridgePanel({
 
       setStep('unlocking', { ethTxHash: ethHash })
       setProgressMsg('wOCT burned. Bridge relayer will unlock OCT on Octra (~2 min)...')
-
-      // Don't block — OCT unlock is automatic by bridge relayer
       setStep('done', { ethTxHash: ethHash })
       setProgressMsg('')
       onRefreshBalances()
@@ -205,7 +201,7 @@ export function BridgePanel({
       setStep('error', { error: err instanceof Error ? err.message : String(err) })
       setProgressMsg('')
     }
-  }, [amount, octraAddress, evmAddress, onRefreshBalances])
+  }, [amount, octraAddress, evmAddress, onRefreshBalances, onRequestCapability])
 
   const handleBridge = useCallback(() => {
     if (!amount || amountNum <= 0 || amountError) return
@@ -248,7 +244,10 @@ export function BridgePanel({
           <p className="text-xs text-muted-foreground mb-5 max-w-xs">
             One wallet, two chains. OctWa derives your Ethereum address from the same key.
           </p>
-          <button onClick={onConnect} className="px-6 py-2.5 bg-primary text-primary-foreground text-sm hover:opacity-90 transition-opacity">
+          <button
+            onClick={onConnect}
+            className="px-6 py-2.5 bg-[#3B567F] text-white text-sm hover:opacity-90 transition-opacity"
+          >
             Connect OctWa
           </button>
         </motion.div>
@@ -268,42 +267,63 @@ export function BridgePanel({
               <span className="font-mono text-foreground">{shortenAddress(octraAddress!, 8)}</span>
             </div>
             <div className="flex items-center gap-1.5">
-              <button onClick={onRefreshBalances} disabled={balanceLoading} className="hover-glow transition-all text-muted-foreground disabled:opacity-40 mr-1">
-                <RefreshIcon size={9} className={balanceLoading ? 'animate-spin' : ''} />
+              <button
+                onClick={onRefreshBalances}
+                disabled={balanceLoading}
+                className="hover-glow transition-all text-muted-foreground disabled:opacity-40 mr-1"
+              >
+                <RefreshCw size={9} className={balanceLoading ? 'animate-spin' : ''} />
               </button>
-              {balanceLoading ? <Loader2 size={9} className="animate-spin text-muted-foreground" /> : (
-                <span className="font-mono font-medium text-foreground">
-                  {octBalance ? parseFloat(octBalance).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 6 }) : '—'}
-                </span>
-              )}
+              {balanceLoading
+                ? <Loader2 size={9} className="animate-spin text-muted-foreground" />
+                : (
+                  <span className="font-mono font-medium text-foreground">
+                    {octBalance
+                      ? parseFloat(octBalance).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 6 })
+                      : '—'}
+                  </span>
+                )
+              }
               <span className="text-muted-foreground">OCT</span>
             </div>
           </div>
+
           <div className="flex items-center justify-between text-[10px] mb-1.5">
             <div className="flex items-center gap-1.5">
               <span className="text-muted-foreground w-7">ETH</span>
               <span className="font-mono text-foreground">{shortenAddress(evmAddress!, 8)}</span>
             </div>
             <div className="flex items-center gap-1.5">
-              {balanceLoading ? <Loader2 size={9} className="animate-spin text-muted-foreground" /> : (
-                <span className="font-mono font-medium text-foreground">
-                  {ethBalance ? parseFloat(ethBalance).toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 6 }) : '—'}
-                </span>
-              )}
+              {balanceLoading
+                ? <Loader2 size={9} className="animate-spin text-muted-foreground" />
+                : (
+                  <span className="font-mono font-medium text-foreground">
+                    {ethBalance
+                      ? parseFloat(ethBalance).toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 6 })
+                      : '—'}
+                  </span>
+                )
+              }
               <span className="text-muted-foreground">ETH</span>
             </div>
           </div>
+
           <div className="flex items-center justify-between text-[10px]">
             <div className="flex items-center gap-1.5">
               <span className="text-muted-foreground w-7">wOCT</span>
               <span className="font-mono text-foreground">{shortenAddress(evmAddress!, 8)}</span>
             </div>
             <div className="flex items-center gap-1.5">
-              {balanceLoading ? <Loader2 size={9} className="animate-spin text-muted-foreground" /> : (
-                <span className="font-mono font-medium text-foreground">
-                  {woctBalance ? parseFloat(woctBalance).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 6 }) : '—'}
-                </span>
-              )}
+              {balanceLoading
+                ? <Loader2 size={9} className="animate-spin text-muted-foreground" />
+                : (
+                  <span className="font-mono font-medium text-foreground">
+                    {woctBalance
+                      ? parseFloat(woctBalance).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 6 })
+                      : '—'}
+                  </span>
+                )
+              }
               <span className="text-muted-foreground">wOCT</span>
             </div>
           </div>
@@ -311,26 +331,20 @@ export function BridgePanel({
 
         {/* Direction tabs */}
         <div className="flex border-b border-border mb-5">
-          <button
-            onClick={() => { if (!isActive) { setDirection('oct-to-woct'); reset() } }}
-            className={cn('flex-1 py-2 text-xs font-medium transition-all',
-              direction === 'oct-to-woct'
-                ? 'text-primary border-b-2 border-primary'
-                : 'text-muted-foreground hover:[filter:drop-shadow(0_0_4px_currentColor)_drop-shadow(0_0_8px_currentColor)]'
-            )}
-          >
-            OCT → wOCT
-          </button>
-          <button
-            onClick={() => { if (!isActive) { setDirection('woct-to-oct'); reset() } }}
-            className={cn('flex-1 py-2 text-xs font-medium transition-all',
-              direction === 'woct-to-oct'
-                ? 'text-primary border-b-2 border-primary'
-                : 'text-muted-foreground hover:[filter:drop-shadow(0_0_4px_currentColor)_drop-shadow(0_0_8px_currentColor)]'
-            )}
-          >
-            wOCT → OCT
-          </button>
+          {(['oct-to-woct', 'woct-to-oct'] as BridgeDirection[]).map(dir => (
+            <button
+              key={dir}
+              onClick={() => { if (!isActive) { setDirection(dir); reset() } }}
+              className={cn(
+                'flex-1 py-2 text-xs font-medium transition-all',
+                direction === dir
+                  ? 'text-[#3B567F] border-b-2 border-[#3B567F]'
+                  : 'text-muted-foreground hover-glow'
+              )}
+            >
+              {dir === 'oct-to-woct' ? 'OCT → wOCT' : 'wOCT → OCT'}
+            </button>
+          ))}
         </div>
 
         <AnimatePresence mode="wait">
@@ -339,10 +353,19 @@ export function BridgePanel({
 
               {/* From → To */}
               <div className="flex items-center gap-2 mb-4 text-xs text-muted-foreground">
-                <span className="px-2 py-1 border border-border">{isOctToWoct ? 'Octra' : 'Ethereum'}</span>
+                <span className="px-2 py-1 border border-border">
+                  {isOctToWoct ? 'Octra' : 'Ethereum'}
+                </span>
                 <ArrowRight size={12} />
-                <span className="px-2 py-1 border border-border">{isOctToWoct ? 'Ethereum' : 'Octra'}</span>
-                <button onClick={switchDirection} disabled={isActive} className="ml-auto hover-glow transition-all disabled:opacity-40" title="Swap direction">
+                <span className="px-2 py-1 border border-border">
+                  {isOctToWoct ? 'Ethereum' : 'Octra'}
+                </span>
+                <button
+                  onClick={switchDirection}
+                  disabled={isActive}
+                  className="ml-auto hover-glow transition-all disabled:opacity-40"
+                  title="Swap direction"
+                >
                   <ArrowLeftRight size={13} />
                 </button>
               </div>
@@ -353,7 +376,8 @@ export function BridgePanel({
                   <label className="text-xs text-muted-foreground">Amount ({fromToken})</label>
                   <div className="flex items-center gap-2 text-[10px]">
                     <span className="text-muted-foreground">
-                      bal: <span className="text-foreground font-mono">
+                      bal:{' '}
+                      <span className="text-foreground font-mono">
                         {fromBalance.toLocaleString('en-US', { maximumFractionDigits: 6 })}
                       </span>
                     </span>
@@ -361,7 +385,7 @@ export function BridgePanel({
                       <button
                         onClick={handleMax}
                         disabled={isActive}
-                        className="text-primary hover:[filter:drop-shadow(0_0_4px_currentColor)_drop-shadow(0_0_8px_currentColor)] transition-all disabled:opacity-40"
+                        className="text-[#3B567F] hover-glow transition-all disabled:opacity-40"
                       >
                         Max
                       </button>
@@ -369,35 +393,44 @@ export function BridgePanel({
                   </div>
                 </div>
                 <input
-                  type="number" min="0" step="any" placeholder="0.000000"
+                  type="number"
+                  min="0"
+                  step="any"
+                  placeholder="0.000000"
                   value={amount}
                   onChange={e => setAmount(e.target.value)}
                   disabled={isActive}
                   className={cn(
-                    'w-full bg-background border px-3 py-2 text-sm focus:outline-none transition-colors disabled:opacity-50',
-                    amountError ? 'border-destructive' : 'border-input focus:border-primary'
+                    'w-full bg-background border px-3 py-2 text-sm font-mono focus:outline-none transition-colors disabled:opacity-50',
+                    amountError ? 'border-destructive' : 'border-input focus:border-[#3B567F]'
                   )}
                 />
-                {amountError && <p className="text-[10px] text-destructive mt-1">{amountError}</p>}
+                {amountError && (
+                  <p className="text-[10px] text-destructive mt-1">{amountError}</p>
+                )}
                 {!amountError && amount && amountNum > 0 && isOctToWoct && (
-                  <p className="text-[10px] text-muted-foreground mt-1">0.01 OCT reserved for network fee</p>
+                  <p className="text-[10px] text-muted-foreground mt-1">
+                    0.01 OCT reserved for network fee
+                  </p>
                 )}
               </div>
 
-              {/* Recipient info */}
+              {/* Recipient */}
               <div className="mb-5">
                 <label className="text-xs text-muted-foreground block mb-1">
                   {isOctToWoct ? 'ETH Recipient' : 'OCT Recipient'}
                 </label>
                 <div className="w-full bg-muted/30 border border-border px-3 py-2 text-xs font-mono text-muted-foreground flex items-center justify-between">
                   <span>{isOctToWoct ? evmAddress : octraAddress}</span>
-                  <span className="text-[9px] text-primary ml-2 flex-shrink-0">derived</span>
+                  <span className="text-[9px] text-[#3B567F] ml-2 flex-shrink-0">derived</span>
                 </div>
               </div>
 
               {/* Summary */}
               {amountNum > 0 && !amountError && (
-                <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+                <motion.div
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
                   className="mb-5 p-3 border border-dashed border-border text-xs space-y-1"
                 >
                   <div className="flex justify-between">
@@ -406,7 +439,7 @@ export function BridgePanel({
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">You receive</span>
-                    <span className="text-primary">{amount} {toToken}</span>
+                    <span className="text-[#3B567F]">{amount} {toToken}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Bridge fee</span>
@@ -425,7 +458,7 @@ export function BridgePanel({
                 </motion.div>
               )}
 
-              {/* ETH balance warning (OCT→wOCT only) */}
+              {/* ETH balance warning */}
               {ethLow && (
                 <div className="mb-3 px-3 py-2 border border-yellow-500/40 text-[10px] text-yellow-600 dark:text-yellow-400">
                   ⚠ ETH balance low ({ethBalanceNum.toFixed(4)} ETH). Need ~{MIN_ETH_FOR_GAS.toFixed(5)} ETH for gas.
@@ -444,7 +477,7 @@ export function BridgePanel({
               <button
                 onClick={handleBridge}
                 disabled={!canBridge}
-                className="w-full py-2.5 bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
+                className="w-full py-2.5 bg-[#3B567F] text-white text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 {isActive ? (
                   <span className="flex items-center justify-center gap-2">
@@ -456,13 +489,19 @@ export function BridgePanel({
                 )}
               </button>
 
-              {/* Step tracker */}
               {isActive && <StepTracker direction={direction} currentStep={state.step} />}
             </motion.div>
 
           ) : isDone ? (
-            <motion.div key="done" variants={pageVariants} initial="initial" animate="animate" exit="exit" className="text-center py-6">
-              <CheckCircle2 size={40} className="text-primary mx-auto mb-3" />
+            <motion.div
+              key="done"
+              variants={pageVariants}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              className="text-center py-6"
+            >
+              <CheckCircle2 size={40} className="text-[#3B567F] mx-auto mb-3" />
               <p className="text-sm font-medium mb-1">Transaction Submitted!</p>
               <p className="text-xs text-muted-foreground mb-1">
                 {state.amount} {isOctToWoct ? 'OCT locked' : 'wOCT burned'}
@@ -474,28 +513,51 @@ export function BridgePanel({
               </p>
               <div className="space-y-2 mb-5 text-xs">
                 {state.octraTxHash && (
-                  <TxLink label="Octra TX" hash={state.octraTxHash}
+                  <TxLink
+                    label="Octra TX"
+                    hash={state.octraTxHash}
                     href={`https://octrascan.io/tx.html?hash=${state.octraTxHash}`}
-                    onCopy={() => copyToClipboard(state.octraTxHash!, 'octra')} copied={copied === 'octra'} />
+                    onCopy={() => copyToClipboard(state.octraTxHash!, 'octra')}
+                    copied={copied === 'octra'}
+                  />
                 )}
                 {state.ethTxHash && (
-                  <TxLink label="Ethereum TX" hash={state.ethTxHash}
+                  <TxLink
+                    label="Ethereum TX"
+                    hash={state.ethTxHash}
                     href={`https://etherscan.io/tx/${state.ethTxHash}`}
-                    onCopy={() => copyToClipboard(state.ethTxHash!, 'eth')} copied={copied === 'eth'} />
+                    onCopy={() => copyToClipboard(state.ethTxHash!, 'eth')}
+                    copied={copied === 'eth'}
+                  />
                 )}
               </div>
-              <button onClick={reset} className="flex items-center gap-1.5 mx-auto text-xs text-muted-foreground hover-glow transition-all">
-                <RefreshCw size={12} />Bridge again
+              <button
+                onClick={reset}
+                className="flex items-center gap-1.5 mx-auto text-xs text-muted-foreground hover-glow transition-all"
+              >
+                <RefreshCw size={12} />
+                Bridge again
               </button>
             </motion.div>
 
           ) : (
-            <motion.div key="error" variants={pageVariants} initial="initial" animate="animate" exit="exit" className="text-center py-6">
+            <motion.div
+              key="error"
+              variants={pageVariants}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              className="text-center py-6"
+            >
               <XCircle size={40} className="text-destructive mx-auto mb-3" />
               <p className="text-sm font-medium mb-1">Bridge Failed</p>
               <p className="text-xs text-muted-foreground mb-4 break-all px-2">{state.error}</p>
-              <button onClick={reset} className="flex items-center gap-1.5 mx-auto text-xs text-muted-foreground hover-glow transition-all">
-                <RefreshCw size={12} />Try again
+              <button
+                onClick={reset}
+                className="flex items-center gap-1.5 mx-auto text-xs text-muted-foreground hover-glow transition-all"
+              >
+                <RefreshCw size={12} />
+                Try again
               </button>
             </motion.div>
           )}
@@ -507,25 +569,35 @@ export function BridgePanel({
 
 // ── Step tracker ──────────────────────────────────────────────────────────────
 
-function StepTracker({ direction, currentStep }: { direction: BridgeDirection; currentStep: BridgeStep }) {
+function StepTracker({
+  direction,
+  currentStep,
+}: {
+  direction: BridgeDirection
+  currentStep: BridgeStep
+}) {
   const steps = direction === 'oct-to-woct' ? OCT_TO_WOCT_STEPS : WOCT_TO_OCT_STEPS
   const currentIdx = steps.findIndex(s => s.step === currentStep)
+
   return (
     <div className="flex items-center justify-center mt-4">
       {steps.map((s, i) => (
         <div key={s.step} className="flex items-center">
           <div className="flex flex-col items-center gap-1">
-            <div className={cn('w-5 h-5 flex items-center justify-center text-[9px] border',
-              i < currentIdx  ? 'bg-primary border-primary text-primary-foreground'
-              : i === currentIdx ? 'border-primary text-primary'
-              : 'border-border text-muted-foreground'
+            <div className={cn(
+              'w-5 h-5 flex items-center justify-center text-[9px] border',
+              i < currentIdx
+                ? 'bg-[#3B567F] border-[#3B567F] text-white'
+                : i === currentIdx
+                ? 'border-[#3B567F] text-[#3B567F]'
+                : 'border-border text-muted-foreground'
             )}>
               {i < currentIdx ? '✓' : i + 1}
             </div>
             <span className="text-[9px] text-muted-foreground whitespace-nowrap">{s.label}</span>
           </div>
           {i < steps.length - 1 && (
-            <div className={cn('w-8 h-px mb-4', i < currentIdx ? 'bg-primary' : 'bg-border')} />
+            <div className={cn('w-8 h-px mb-4', i < currentIdx ? 'bg-[#3B567F]' : 'bg-border')} />
           )}
         </div>
       ))}
@@ -535,8 +607,18 @@ function StepTracker({ direction, currentStep }: { direction: BridgeDirection; c
 
 // ── Tx link ───────────────────────────────────────────────────────────────────
 
-function TxLink({ label, hash, href, onCopy, copied }: {
-  label: string; hash: string; href: string; onCopy: () => void; copied: boolean
+function TxLink({
+  label,
+  hash,
+  href,
+  onCopy,
+  copied,
+}: {
+  label: string
+  hash: string
+  href: string
+  onCopy: () => void
+  copied: boolean
 }) {
   return (
     <div className="flex items-center justify-between px-3 py-2 border border-border">
@@ -544,9 +626,17 @@ function TxLink({ label, hash, href, onCopy, copied }: {
       <div className="flex items-center gap-2">
         <span className="font-mono">{shortenAddress(hash, 8)}</span>
         <button onClick={onCopy} className="hover-glow transition-all text-muted-foreground">
-          {copied ? <CheckCircle2 size={11} className="text-primary" /> : <Copy size={11} />}
+          {copied
+            ? <CheckCircle2 size={11} className="text-[#3B567F]" />
+            : <Copy size={11} />
+          }
         </button>
-        <a href={href} target="_blank" rel="noopener noreferrer" className="hover-glow transition-all text-muted-foreground">
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="hover-glow transition-all text-muted-foreground"
+        >
           <ExternalLink size={11} />
         </a>
       </div>

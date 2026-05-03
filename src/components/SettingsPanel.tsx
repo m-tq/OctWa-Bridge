@@ -35,7 +35,7 @@ export function SettingsPanel() {
             type="text"
             value={rpc}
             onChange={e => setRpc(e.target.value)}
-            className="w-full bg-background border border-input px-3 py-2 text-xs focus:outline-none focus:border-primary transition-colors font-mono"
+            className="w-full bg-background border border-input px-3 py-2 text-xs focus:outline-none focus:border-[#3B567F] transition-colors font-mono"
             placeholder="http://..."
           />
           <p className="text-[10px] text-muted-foreground mt-1">
@@ -45,7 +45,7 @@ export function SettingsPanel() {
 
         <button
           onClick={save}
-          className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground text-xs hover:opacity-90 transition-opacity"
+          className="flex items-center gap-2 px-4 py-2 bg-[#3B567F] text-white text-xs hover:opacity-90 transition-opacity"
         >
           <Save size={12} />
           {saved ? 'Saved!' : 'Save Settings'}

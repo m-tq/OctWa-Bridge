@@ -16,7 +16,7 @@ function InfoRow({ label, value, href }: { label: string; value: string; href?: 
           href={href}
           target="_blank"
           rel="noopener noreferrer"
-          className="font-mono text-right break-all hover-glow transition-all flex items-center gap-1"
+          className="font-mono text-right break-all hover-glow transition-all flex items-center gap-1 text-[#3B567F]"
         >
           {value}
           <ExternalLink size={9} className="flex-shrink-0" />
@@ -44,12 +44,11 @@ export function AboutPanel() {
         </p>
 
         <div className="mb-5">
-          <h3 className="text-xs font-medium mb-2 text-muted-foreground uppercase tracking-wider">Contracts</h3>
+          <h3 className="text-xs font-medium mb-2 text-muted-foreground uppercase tracking-wider">
+            Contracts
+          </h3>
           <div className="border border-border p-3">
-            <InfoRow
-              label="Octra Bridge"
-              value={OCTRA_BRIDGE_CONTRACT}
-            />
+            <InfoRow label="Octra Bridge" value={OCTRA_BRIDGE_CONTRACT} />
             <InfoRow
               label="ETH Bridge (verifyAndMint)"
               value={WOCT_CONTRACT_ADDRESS}
@@ -64,7 +63,9 @@ export function AboutPanel() {
         </div>
 
         <div className="mb-5">
-          <h3 className="text-xs font-medium mb-2 text-muted-foreground uppercase tracking-wider">OCT → wOCT Flow</h3>
+          <h3 className="text-xs font-medium mb-2 text-muted-foreground uppercase tracking-wider">
+            OCT → wOCT Flow
+          </h3>
           <ol className="space-y-1 text-xs text-muted-foreground list-none">
             {[
               'Call lock_to_eth on Octra bridge contract',
@@ -74,7 +75,7 @@ export function AboutPanel() {
               'wOCT minted to recipient',
             ].map((step, i) => (
               <li key={i} className="flex items-start gap-2">
-                <span className="text-primary flex-shrink-0">{i + 1}.</span>
+                <span className="text-[#3B567F] flex-shrink-0">{i + 1}.</span>
                 {step}
               </li>
             ))}
@@ -82,26 +83,29 @@ export function AboutPanel() {
         </div>
 
         <div className="mb-5">
-          <h3 className="text-xs font-medium mb-2 text-muted-foreground uppercase tracking-wider">wOCT → OCT Flow</h3>
+          <h3 className="text-xs font-medium mb-2 text-muted-foreground uppercase tracking-wider">
+            wOCT → OCT Flow
+          </h3>
           <ol className="space-y-1 text-xs text-muted-foreground list-none">
             {[
-              'Approve wOCT spend on Ethereum',
-              'Burn wOCT (transfer to zero address)',
-              'Bridge processes the burn event',
+              'Call burnToOctra on Ethereum (single tx, no approve needed)',
+              'Bridge relayer detects BurnInitiated event',
               'OCT unlocked on Octra via unlock_trusted',
+              'OCT arrives in ~2 minutes',
             ].map((step, i) => (
               <li key={i} className="flex items-start gap-2">
-                <span className="text-primary flex-shrink-0">{i + 1}.</span>
+                <span className="text-[#3B567F] flex-shrink-0">{i + 1}.</span>
                 {step}
               </li>
             ))}
           </ol>
         </div>
 
-        <div className="border border-dashed border-border p-3 text-xs text-muted-foreground">
+        <div className="border border-dashed border-border p-3 text-xs text-muted-foreground space-y-1">
           <p>Bridge fee: <span className="text-foreground">0 (free)</span></p>
           <p>Denomination: <span className="text-foreground">1 OCT = 1 wOCT = 1,000,000 raw units</span></p>
           <p>Est. time: <span className="text-foreground">~2 minutes</span></p>
+          <p>SDK: <span className="text-foreground">@octwa/sdk v1.3.3</span></p>
         </div>
       </motion.div>
     </div>

@@ -11,7 +11,7 @@ export function Footer() {
           href="https://etherscan.io/token/0x4647e1fe715c9e23959022c2416c71867f5a6e80"
           target="_blank"
           rel="noopener noreferrer"
-          className="hover-glow transition-all"
+          className="hover-glow transition-all text-[#3B567F]"
         >
           0x4647…a6e80
         </a>

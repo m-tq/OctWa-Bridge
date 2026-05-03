@@ -73,7 +73,7 @@ function DisclaimerModal({ onAccept }: { onAccept: () => void }) {
         {/* Accept button */}
         <button
           onClick={onAccept}
-          className="w-full py-2.5 bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 transition-opacity"
+          className="w-full py-2.5 bg-[#3B567F] text-white text-sm font-medium hover:opacity-90 transition-opacity"
         >
           I Understand — Continue
         </button>

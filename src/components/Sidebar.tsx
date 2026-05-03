@@ -36,8 +36,8 @@ export function Sidebar({ open, onToggle, activePage, onNavigate }: SidebarProps
                 className={cn(
                   'flex items-center gap-3 px-2 py-2 text-xs w-full text-left transition-all',
                   isActive
-                    ? 'text-primary border-l-2 border-primary pl-[6px]'
-                    : 'text-muted-foreground hover:[filter:drop-shadow(0_0_4px_currentColor)_drop-shadow(0_0_8px_currentColor)]'
+                    ? 'text-[#3B567F] border-l-2 border-[#3B567F] pl-[6px]'
+                    : 'text-muted-foreground hover-glow'
                 )}
               >
                 <span className="flex-shrink-0">{item.icon}</span>
@@ -58,6 +58,7 @@ export function Sidebar({ open, onToggle, activePage, onNavigate }: SidebarProps
         </nav>
       </motion.aside>
 
+      {/* Toggle button */}
       <button
         onClick={onToggle}
         className="absolute -right-[17px] top-4 z-10 w-[17px] h-8 border border-border bg-background text-[10px] text-muted-foreground flex items-center justify-center hover:opacity-80 transition-opacity"

@@ -1,4 +1,5 @@
-import { Sun, Moon, Wallet, LogOut, Loader2 } from 'lucide-react'
+import { useState } from 'react'
+import { Sun, Moon, Wallet, LogOut, Loader2, Copy, CheckCheck } from 'lucide-react'
 import { useTheme } from './ThemeProvider'
 import { Logo } from './Logo'
 import { cn, shortenAddress } from '@/lib/utils'
@@ -10,6 +11,42 @@ interface HeaderProps {
   evmAddress?: string
   onConnect: () => void
   onDisconnect: () => void
+}
+
+function CopyableAddress({
+  label,
+  address,
+  full,
+}: {
+  label: string
+  address: string
+  full: string
+}) {
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(full)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }
+
+  return (
+    <button
+      onClick={handleCopy}
+      title={`Copy ${label} address: ${full}`}
+      className="flex items-center gap-1 group text-left"
+    >
+      <span className="font-mono text-[10px] leading-tight group-hover:text-foreground transition-colors">
+        {address}
+      </span>
+      <span className="opacity-0 group-hover:opacity-100 transition-opacity">
+        {copied
+          ? <CheckCheck size={9} className="text-[#3B567F]" />
+          : <Copy size={9} className="text-muted-foreground" />
+        }
+      </span>
+    </button>
+  )
 }
 
 export function Header({
@@ -71,16 +108,29 @@ export function Header({
       <div className="flex items-center gap-2">
         {connected && octraAddress ? (
           <div className="flex items-center gap-2">
-            <div className="hidden sm:flex flex-col items-end text-[10px] leading-tight">
-              <span className="text-foreground font-mono">{shortenAddress(octraAddress, 6)}</span>
+            {/* Copyable addresses */}
+            <div className="hidden sm:flex flex-col items-end gap-0.5">
+              <CopyableAddress
+                label="Octra"
+                address={shortenAddress(octraAddress, 6)}
+                full={octraAddress}
+              />
               {evmAddress && (
-                <span className="text-muted-foreground font-mono">{shortenAddress(evmAddress, 6)}</span>
+                <CopyableAddress
+                  label="EVM"
+                  address={shortenAddress(evmAddress, 6)}
+                  full={evmAddress}
+                />
               )}
             </div>
+
+            {/* Connected badge */}
             <div className="flex items-center gap-1 px-2 py-1.5 border border-[#3B567F]/40 text-[#3B567F] text-xs">
               <Wallet size={11} />
               <span className="hidden sm:inline">Connected</span>
             </div>
+
+            {/* Disconnect */}
             <button
               onClick={onDisconnect}
               className="p-1.5 hover-glow transition-all text-muted-foreground"
@@ -103,6 +153,7 @@ export function Header({
           </button>
         )}
 
+        {/* Theme toggle */}
         <button
           onClick={toggleTheme}
           className="p-1.5 hover-glow transition-all text-muted-foreground"

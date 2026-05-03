@@ -105,7 +105,7 @@ export function AboutPanel() {
           <p>Bridge fee: <span className="text-foreground">0 (free)</span></p>
           <p>Denomination: <span className="text-foreground">1 OCT = 1 wOCT = 1,000,000 raw units</span></p>
           <p>Est. time: <span className="text-foreground">~2 minutes</span></p>
-          <p>SDK: <span className="text-foreground">@octwa/sdk v1.3.3</span></p>
+          <p>SDK: <span className="text-foreground">@octwa/sdk v1.3.4</span></p>
         </div>
       </motion.div>
     </div>

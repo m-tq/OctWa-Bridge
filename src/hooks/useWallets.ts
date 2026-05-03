@@ -23,7 +23,7 @@ export interface WalletState {
 /**
  * useWallets — manages OctWa wallet connection for the bridge.
  *
- * Uses @octwa/sdk v1.3.3 for:
+ * Uses @octwa/sdk v1.3.4 for:
  *   - Provider detection
  *   - connect() / disconnect() lifecycle
  *   - getBalance() — OCT balance via SDK capability (no direct RPC)

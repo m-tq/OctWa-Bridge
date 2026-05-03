@@ -96,8 +96,19 @@ async function getSDK(): Promise<OctraSDK> {
 // ─── OCT → wOCT ──────────────────────────────────────────────────────────────
 
 /**
- * Step 1: Lock OCT on Octra via SDK sendContractCall.
- * Opens popup for user approval.
+ * Step 1: Lock OCT on Octra via SDK invoke with send_transaction.
+ *
+ * The Octra bridge contract expects:
+ *   op_type:        'call'
+ *   encrypted_data: 'lock_to_eth'   ← method name as plain string
+ *   message:        '["0xEthAddr"]' ← params as JSON array string
+ *   to:             OCTRA_BRIDGE_CONTRACT
+ *   amount:         OCT amount (float)
+ *
+ * This matches the original webcli/bridge format verified from on-chain txs.
+ * We use sdk.invoke directly (not sendContractCall) to control the exact
+ * payload structure — sendContractCall wraps params inside encrypted_data
+ * as JSON which the bridge contract does not expect.
  */
 export async function lockOctOnOctra(params: {
   octraAddress: string
@@ -115,14 +126,31 @@ export async function lockOctOnOctra(params: {
 
   const sdk = await getSDK()
 
-  const result = await sdk.sendContractCall(capabilityId, {
-    contract: OCTRA_BRIDGE_CONTRACT,
-    method:   OCTRA_LOCK_METHOD,
-    params:   [ethRecipient],
-    amount:   parseFloat(amountOct),
+  // Payload must match the format DAppRequestHandler passes to createTransaction:
+  //   to             → bridge contract address
+  //   amount         → OCT amount as float
+  //   op_type        → 'call'
+  //   encrypted_data → method name as plain string (NOT JSON-wrapped)
+  //   message        → params as JSON array string (ETH recipient)
+  const result = await sdk.invoke({
+    capabilityId,
+    method: 'send_transaction',
+    payload: new TextEncoder().encode(JSON.stringify({
+      to:             OCTRA_BRIDGE_CONTRACT,
+      amount:         parseFloat(amountOct),
+      op_type:        'call',
+      encrypted_data: OCTRA_LOCK_METHOD,          // 'lock_to_eth' — plain string
+      message:        JSON.stringify([ethRecipient]), // params as JSON array string
+    })),
   })
 
-  return { hash: result.txHash }
+  if (!result.success) throw new Error(result.error || 'Wallet rejected lock transaction')
+
+  // Decode txHash from result.data
+  const txHash = extractTxHash(result.data)
+  if (!txHash) throw new Error('No txHash returned from lock transaction')
+
+  return { hash: txHash }
 }
 
 /**

@@ -112,6 +112,7 @@ function AppContent() {
     loading,
     balanceLoading,
     connectError,
+    sdk,
     connect,
     disconnect,
     refreshBalances,
@@ -249,6 +250,7 @@ function AppContent() {
                 balanceLoading={balanceLoading}
                 onRefreshBalances={refreshBalances}
                 onConnect={connect}
+                sdk={sdk}
                 onRequestCapability={requestCapability}
               />
             </motion.div>
@@ -258,6 +260,7 @@ function AppContent() {
               <HistoryPanel
                 octraAddress={octraAddress}
                 evmAddress={evmAddress}
+                sdk={sdk}
                 onRequestCapability={requestCapability}
               />
             </motion.div>

@@ -190,6 +190,7 @@ export function useWallets() {
 
   return {
     ...state,
+    sdk: sdkRef.current,
     connect,
     disconnect,
     refreshBalances,

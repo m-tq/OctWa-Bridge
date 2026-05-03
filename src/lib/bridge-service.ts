@@ -1,17 +1,10 @@
 /**
  * Bridge Service — OCT (Octra) ↔ wOCT (Ethereum)
  *
- * OCT → wOCT flow:
- *   1. lockOctOnOctra()       — send_transaction via SDK sendContractCall
- *   2. waitForLockedEvent()   — poll Octra RPC for contract_receipt
- *   3. waitForEpochOnEth()    — wait for ETH lightClient to index epoch
- *   4. claimWoctOnEthereum()  — send_evm_transaction via SDK sendEvmTransaction
- *
- * wOCT → OCT flow:
- *   1. burnWoctToOctra()      — send_evm_transaction via SDK sendEvmTransaction
- *   2. Bridge relayer auto-unlocks OCT on Octra (~2 min)
- *
- * All signing happens inside the OctWa extension — private keys never leave.
+ * All functions receive the connected OctraSDK instance as a parameter.
+ * There is NO module-level SDK instance here — the single connected instance
+ * lives in useWallets.ts (sdkRef) and is passed down to these functions.
+ * This ensures all SDK calls share the same connection and capability state.
  */
 
 import { ethers } from 'ethers'
@@ -31,7 +24,7 @@ import {
   BRIDGE_DST_BRIDGE_ID,
   BRIDGE_TOKEN_ID,
 } from './constants'
-import { OctraSDK } from '@octwa/sdk'
+import type { OctraSDK } from '@octwa/sdk'
 import {
   getBalance,
   waitForConfirmation,
@@ -42,84 +35,32 @@ import { toRawUnits } from './utils'
 
 const INFURA_KEY = import.meta.env.VITE_INFURA_API_KEY || '121cf128273c4f0cb73770b391070d3b'
 
-// ─── Shared helper ────────────────────────────────────────────────────────────
-
-/**
- * Extract txHash from an invoke result.data which can be:
- *   - Uint8Array (JSON-encoded)
- *   - string (JSON or raw hash)
- *   - object with numeric keys {0:123,...} (serialized Uint8Array)
- *   - plain object { txHash, hash }
- */
-function extractTxHash(raw: unknown): string | null {
-  let jsonStr: string | null = null
-
-  if (raw instanceof Uint8Array) {
-    jsonStr = new TextDecoder().decode(raw)
-  } else if (typeof raw === 'string') {
-    jsonStr = raw
-  } else if (raw && typeof raw === 'object') {
-    const keys = Object.keys(raw as Record<string, unknown>)
-    if (keys.length > 0 && keys.every(k => /^\d+$/.test(k))) {
-      const obj = raw as Record<string, number>
-      const bytes = new Uint8Array(keys.length)
-      keys.sort((a, b) => Number(a) - Number(b)).forEach((k, i) => { bytes[i] = obj[k] })
-      jsonStr = new TextDecoder().decode(bytes)
-    } else {
-      const d = raw as Record<string, unknown>
-      return (d?.txHash as string) || (d?.hash as string) || null
-    }
-  }
-
-  if (jsonStr) {
-    try {
-      const parsed = JSON.parse(jsonStr)
-      return parsed.txHash || parsed.hash || null
-    } catch {
-      return jsonStr.trim() || null
-    }
-  }
-
-  return null
-}
-
-// ─── SDK instance (lazy) ──────────────────────────────────────────────────────
-
-let _sdk: OctraSDK | null = null
-
-async function getSDK(): Promise<OctraSDK> {
-  if (_sdk) return _sdk
-  _sdk = await OctraSDK.init({ timeout: 3000 })
-  return _sdk
-}
-
 // ─── OCT → wOCT ──────────────────────────────────────────────────────────────
 
 /**
  * Step 1: Lock OCT on Octra via SDK sendContractCall.
- * Opens popup for user approval.
  *
- * sendContractCall encodes the payload as:
+ * Wire format (matches Octra node):
  *   op_type:        'call'
  *   encrypted_data: 'lock_to_eth'       ← plain method name
  *   message:        '["0xEthAddr"]'     ← params as JSON array string
- * This matches the Octra node's expected wire format.
  */
-export async function lockOctOnOctra(params: {
-  octraAddress: string
-  ethRecipient: string
-  amountOct: string
-  capabilityId: string
-  nonce: number
-}): Promise<OctraTxResult> {
+export async function lockOctOnOctra(
+  sdk: OctraSDK,
+  params: {
+    octraAddress: string
+    ethRecipient: string
+    amountOct: string
+    capabilityId: string
+    nonce: number
+  }
+): Promise<OctraTxResult> {
   const { ethRecipient, amountOct, capabilityId } = params
 
   if (!ethers.isAddress(ethRecipient)) throw new Error('Invalid Ethereum address')
 
   const rawAmount = toRawUnits(amountOct, OCT_DECIMALS)
   if (rawAmount <= 0n) throw new Error('Amount must be greater than 0')
-
-  const sdk = await getSDK()
 
   const result = await sdk.sendContractCall(capabilityId, {
     contract: OCTRA_BRIDGE_CONTRACT,
@@ -133,6 +74,7 @@ export async function lockOctOnOctra(params: {
 
 /**
  * Step 2: Wait for confirmation + extract Locked event from contract_receipt.
+ * Uses Octra RPC directly — no SDK needed here.
  */
 export async function waitForLockedEvent(
   octraTxHash: string,
@@ -169,9 +111,9 @@ export async function waitForLockedEvent(
  * Encodes calldata locally, sends via extension (wallet's secp256k1 key).
  */
 export async function claimWoctOnEthereum(
+  sdk: OctraSDK,
   lockedData: LockedEventData,
   capabilityId: string,
-  _nonce: number
 ): Promise<string> {
   const iface = new ethers.Interface(WOCT_ABI as ethers.InterfaceAbi)
 
@@ -193,7 +135,6 @@ export async function claimWoctOnEthereum(
     0,
   ])
 
-  const sdk = await getSDK()
   const result = await sdk.sendEvmTransaction(capabilityId, {
     to:   WOCT_CONTRACT_ADDRESS,
     data: calldata,
@@ -204,12 +145,13 @@ export async function claimWoctOnEthereum(
 
 /**
  * Step 2b: Wait until the ETH lightClient has indexed our lock epoch.
+ * Pure fetch — no SDK needed.
  */
 export async function waitForEpochOnEth(
   lockEpoch: number,
   onProgress?: (msg: string) => void
 ): Promise<void> {
-  const LC_ADDR       = '0xc01ca57dc7f7c4b6f1b6b87b85d79e5ddf0df55d'
+  const LC_ADDR          = '0xc01ca57dc7f7c4b6f1b6b87b85d79e5ddf0df55d'
   const LATEST_EPOCH_SEL = '0x9cb118bf'
   const maxWaitMs = 60 * 60 * 1000
   const pollMs    = 30_000
@@ -253,6 +195,7 @@ export async function waitForEpochOnEth(
 
 /**
  * Refetch LockedEventData from Octra RPC using a known tx hash.
+ * Used by HistoryPanel — no SDK needed.
  */
 export async function refetchLockedEvent(octraTxHash: string): Promise<LockedEventData> {
   const receipt = await getContractReceipt(octraTxHash)
@@ -281,12 +224,15 @@ export async function refetchLockedEvent(octraTxHash: string): Promise<LockedEve
  * Burn wOCT on Ethereum to receive OCT on Octra.
  * Uses SDK sendEvmTransaction — no approve needed (burnToOctra is single call).
  */
-export async function burnWoctToOctra(params: {
-  octraRecipient: string
-  amountWoct: string
-  capabilityId: string
-  nonce: number
-}): Promise<string> {
+export async function burnWoctToOctra(
+  sdk: OctraSDK,
+  params: {
+    octraRecipient: string
+    amountWoct: string
+    capabilityId: string
+    nonce: number
+  }
+): Promise<string> {
   const { octraRecipient, amountWoct, capabilityId } = params
 
   const rawAmount = toRawUnits(amountWoct, OCT_DECIMALS)
@@ -295,7 +241,6 @@ export async function burnWoctToOctra(params: {
   const iface = new ethers.Interface(WOCT_ABI as ethers.InterfaceAbi)
   const calldata = iface.encodeFunctionData('burnToOctra', [octraRecipient, rawAmount])
 
-  const sdk = await getSDK()
   const result = await sdk.sendEvmTransaction(capabilityId, {
     to:   WOCT_CONTRACT_ADDRESS,
     data: calldata,

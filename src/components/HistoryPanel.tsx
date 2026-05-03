@@ -5,6 +5,7 @@ import {
   CheckCircle2, Zap, Clock, Search, AlertCircle,
 } from 'lucide-react'
 import { cn, shortenAddress } from '@/lib/utils'
+import type { OctraSDK } from '@octwa/sdk'
 import type { BridgeTxRecord, BurnRecord } from '@/lib/on-chain-history'
 import { fetchBridgeHistory, fetchBurnHistory, lookupTxHash } from '@/lib/on-chain-history'
 import { claimWoctOnEthereum, refetchLockedEvent, waitForEpochOnEth } from '@/lib/bridge-service'
@@ -22,6 +23,7 @@ const pageVariants = {
 interface HistoryPanelProps {
   octraAddress?: string
   evmAddress?: string
+  sdk: OctraSDK | null
   onRequestCapability: (params: {
     methods: string[]
     scope: 'read' | 'write' | 'compute'
@@ -44,7 +46,7 @@ const STATUS_CLASS: Record<BridgeTxRecord['claimStatus'], string> = {
   unknown:       'text-muted-foreground border-border',
 }
 
-export function HistoryPanel({ octraAddress, evmAddress, onRequestCapability }: HistoryPanelProps) {
+export function HistoryPanel({ octraAddress, evmAddress, sdk, onRequestCapability }: HistoryPanelProps) {
   const [records, setRecords]       = useState<BridgeTxRecord[]>([])
   const [burnRecords, setBurnRecords] = useState<BurnRecord[]>([])
   const [loading, setLoading]       = useState(false)
@@ -131,7 +133,8 @@ export function HistoryPanel({ octraAddress, evmAddress, onRequestCapability }: 
       })
 
       setClaimProg(p => ({ ...p, [rec.octraTxHash]: 'Confirm in OctWa...' }))
-      const ethHash = await claimWoctOnEthereum(lockedData, cap.id, Date.now())
+      if (!sdk) throw new Error('Wallet not connected')
+      const ethHash = await claimWoctOnEthereum(sdk, lockedData, cap.id)
 
       // Store pending claim tx
       storePendingClaim(rec.octraTxHash, ethHash)

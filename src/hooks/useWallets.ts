@@ -5,10 +5,10 @@ import type { Capability } from '@octwa/sdk'
 import { getWoctBalance } from '@/lib/bridge-service'
 
 const INFURA_KEY = import.meta.env.VITE_INFURA_API_KEY || ''
-// For read-only EVM calls (balance, eth_call) we prefer a public RPC that
-// doesn't require an API key. Infura is only used when a valid key is provided.
-// Public fallbacks: Cloudflare, Ankr — no key needed, no CORS restriction.
-const PUBLIC_ETH_RPC = 'https://cloudflare-eth.com'
+// Public RPC fallback for read-only EVM calls (balance, eth_call).
+// publicnode.com: no key required, no CORS restriction, reliable.
+// llamarpc.com: fallback if publicnode is down.
+const PUBLIC_ETH_RPC = 'https://ethereum.publicnode.com'
 const ETH_MAINNET_RPC = INFURA_KEY
   ? `https://mainnet.infura.io/v3/${INFURA_KEY}`
   : PUBLIC_ETH_RPC

@@ -34,7 +34,9 @@ import type { LockedEventData, OctraTxResult } from './types'
 import { toRawUnits } from './utils'
 
 const INFURA_KEY = import.meta.env.VITE_INFURA_API_KEY || ''
-const PUBLIC_ETH_RPC = 'https://cloudflare-eth.com'
+// Public RPC fallback for read-only EVM calls (balance, eth_call).
+// publicnode.com: no key required, no CORS restriction, reliable.
+const PUBLIC_ETH_RPC = 'https://ethereum.publicnode.com'
 const ETH_RPC_URL = INFURA_KEY
   ? `https://mainnet.infura.io/v3/${INFURA_KEY}`
   : PUBLIC_ETH_RPC

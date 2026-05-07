@@ -26,7 +26,7 @@ interface OctraConnection {
   sessionId: string
   walletPubKey: string
   evmAddress: string          // always present — derived from same key
-  network: 'testnet' | 'mainnet'
+  network: 'devnet' | 'mainnet'
   epoch: number               // current epoch at connect time
   branchId: string
 }

@@ -4,8 +4,14 @@ import { OctraSDK } from '@octwa/sdk'
 import type { Capability } from '@octwa/sdk'
 import { getWoctBalance } from '@/lib/bridge-service'
 
-const INFURA_KEY = import.meta.env.VITE_INFURA_API_KEY || '121cf128273c4f0cb73770b391070d3b'
-const ETH_MAINNET_RPC = `https://mainnet.infura.io/v3/${INFURA_KEY}`
+const INFURA_KEY = import.meta.env.VITE_INFURA_API_KEY || ''
+// For read-only EVM calls (balance, eth_call) we prefer a public RPC that
+// doesn't require an API key. Infura is only used when a valid key is provided.
+// Public fallbacks: Cloudflare, Ankr — no key needed, no CORS restriction.
+const PUBLIC_ETH_RPC = 'https://cloudflare-eth.com'
+const ETH_MAINNET_RPC = INFURA_KEY
+  ? `https://mainnet.infura.io/v3/${INFURA_KEY}`
+  : PUBLIC_ETH_RPC
 
 export interface WalletState {
   octraAddress?: string

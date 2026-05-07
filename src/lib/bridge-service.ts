@@ -33,7 +33,11 @@ import {
 import type { LockedEventData, OctraTxResult } from './types'
 import { toRawUnits } from './utils'
 
-const INFURA_KEY = import.meta.env.VITE_INFURA_API_KEY || '121cf128273c4f0cb73770b391070d3b'
+const INFURA_KEY = import.meta.env.VITE_INFURA_API_KEY || ''
+const PUBLIC_ETH_RPC = 'https://cloudflare-eth.com'
+const ETH_RPC_URL = INFURA_KEY
+  ? `https://mainnet.infura.io/v3/${INFURA_KEY}`
+  : PUBLIC_ETH_RPC
 
 // ─── OCT → wOCT ──────────────────────────────────────────────────────────────
 
@@ -159,7 +163,7 @@ export async function waitForEpochOnEth(
 
   while (Date.now() - start < maxWaitMs) {
     try {
-      const res = await fetch(`https://mainnet.infura.io/v3/${INFURA_KEY}`, {
+      const res = await fetch(ETH_RPC_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

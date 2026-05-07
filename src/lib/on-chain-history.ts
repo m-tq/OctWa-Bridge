@@ -26,8 +26,11 @@ import {
 } from './constants'
 import { getContractReceipt } from './octra-rpc'
 
-const INFURA_KEY = import.meta.env.VITE_INFURA_API_KEY || '121cf128273c4f0cb73770b391070d3b'
-const ETH_RPC = `https://mainnet.infura.io/v3/${INFURA_KEY}`
+const INFURA_KEY = import.meta.env.VITE_INFURA_API_KEY || ''
+const PUBLIC_ETH_RPC = 'https://ethereum.publicnode.com'
+const ETH_RPC = INFURA_KEY
+  ? `https://mainnet.infura.io/v3/${INFURA_KEY}`
+  : PUBLIC_ETH_RPC
 
 // Selectors (pre-computed)
 const HASH_BRIDGE_MSG_SEL = '0x93cf0d23'  // hashBridgeMessage(tuple)

@@ -47,15 +47,19 @@ export function removeClaim(octraTxHash: string) {
   save(data)
 }
 
-const INFURA_KEY = import.meta.env.VITE_INFURA_API_KEY || '121cf128273c4f0cb73770b391070d3b'
+const INFURA_KEY = import.meta.env.VITE_INFURA_API_KEY || ''
+const PUBLIC_ETH_RPC = 'https://ethereum.publicnode.com'
+const ETH_RPC = INFURA_KEY
+  ? `https://mainnet.infura.io/v3/${INFURA_KEY}`
+  : PUBLIC_ETH_RPC
 
 /**
- * Check ETH tx status via Infura
+ * Check ETH tx status via public RPC
  * Returns: 'pending' | 'confirmed' | 'failed' | null (not found)
  */
 export async function checkEthTxStatus(ethTxHash: string): Promise<ClaimTxStatus | null> {
   try {
-    const res = await fetch(`https://mainnet.infura.io/v3/${INFURA_KEY}`, {
+    const res = await fetch(ETH_RPC, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

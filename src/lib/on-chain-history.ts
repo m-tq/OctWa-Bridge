@@ -143,8 +143,14 @@ async function fetchLockTxs(
   return txs
     .filter(tx =>
       tx.to === OCTRA_BRIDGE_CONTRACT &&
-      tx.op_type === 'call'
-      // Note: encrypted_data field is not always present — method validated via contract_receipt
+      tx.op_type === 'call' &&
+      // Filter by encrypted_data (method name) when present.
+      // OCT → wOCT uses `lock_to_eth`.
+      // wOCT → OCT uses `unlock_trusted` (called by the bridge relayer).
+      // Explicitly exclude known non-lock methods; allow through when the field
+      // is absent (some nodes omit it) and validate via contract_receipt below.
+      tx.encrypted_data !== 'unlock_trusted' &&
+      (!tx.encrypted_data || tx.encrypted_data === 'lock_to_eth')
     )
     .slice(0, limit)
     .map(tx => ({
@@ -183,7 +189,17 @@ export async function fetchBridgeHistory(
     try {
       // Get Locked event data from contract_receipt
       const receipt = await getContractReceipt(tx.hash)
-      if (!receipt?.success || receipt.method !== 'lock_to_eth') return record
+
+      // Skip silently if receipt confirms this is not a lock_to_eth call.
+      // This handles cases where encrypted_data was absent in the tx list
+      // but the tx is actually a different bridge method (e.g. unlock_to_octra).
+      if (receipt !== null && (!receipt.success || receipt.method !== 'lock_to_eth')) {
+        return null  // will be filtered out below
+      }
+
+      // If receipt is null (RPC error), keep the record as 'unknown' — we can't
+      // confirm or deny it's a lock_to_eth, so show it rather than silently drop.
+      if (!receipt) return record
 
       const lockedEvent = receipt.events.find(e => e.event === 'Locked')
       if (!lockedEvent || lockedEvent.values.length < 4) return record
@@ -215,7 +231,8 @@ export async function fetchBridgeHistory(
     return record
   }))
 
-  return records
+  // Filter out null entries (non-lock_to_eth calls confirmed by receipt)
+  return records.filter((r): r is BridgeTxRecord => r !== null)
 }
 
 /**
@@ -306,6 +323,8 @@ export interface BurnRecord {
   burnNonce: number
   burnId: string
   status: 'confirmed'   // burn is always confirmed if in logs
+  // Octra-side unlock tx (populated when fetched from Octra RPC)
+  octraTxHash?: string
 }
 
 async function getBlockTimestamp(blockHex: string): Promise<number> {
@@ -320,6 +339,82 @@ async function getBlockTimestamp(blockHex: string): Promise<number> {
   })
   const json = await res.json()
   return json.result?.timestamp ? parseInt(json.result.timestamp, 16) * 1000 : Date.now()
+}
+
+/**
+ * Fetch wOCT→OCT unlock history from the Octra side.
+ * These are `unlock_trusted` calls made by the bridge relayer to the bridge
+ * contract on Octra, crediting OCT back to the recipient after a wOCT burn.
+ *
+ * We filter by `to === OCTRA_BRIDGE_CONTRACT` and `encrypted_data === 'unlock_trusted'`,
+ * then parse the `Unlocked` event from contract_receipt to get amount + recipient.
+ *
+ * Note: `from` on these txs is the relayer address, not the user. We match by
+ * the `octraRecipient` field inside the Unlocked event.
+ */
+export async function fetchUnlockHistory(
+  octraAddress: string,
+  rpcUrl: string,
+  limit = 20,
+): Promise<BurnRecord[]> {
+  // Fetch recent transactions TO the bridge contract — we need a broad scan
+  // because unlock_trusted is sent by the relayer (from != octraAddress).
+  // We use octra_transactionsByAddress on the bridge contract address to get
+  // all recent bridge activity, then filter by recipient == octraAddress.
+  const res = await fetch(`${rpcUrl}/rpc`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: 1,
+      method: 'octra_transactionsByAddress',
+      params: [OCTRA_BRIDGE_CONTRACT, 100, 0],
+    }),
+  })
+  const json = await res.json()
+  const txs: Array<Record<string, unknown>> = json.result?.transactions ?? []
+
+  // Filter to unlock_trusted calls only
+  const unlockTxs = txs.filter(tx =>
+    tx.op_type === 'call' &&
+    tx.encrypted_data === 'unlock_trusted'
+  )
+
+  // For each, get contract_receipt to find the Unlocked event and check recipient
+  const records: BurnRecord[] = []
+
+  for (const tx of unlockTxs.slice(0, 50)) {
+    if (records.length >= limit) break
+    try {
+      const receipt = await getContractReceipt(tx.hash as string)
+      if (!receipt?.success || receipt.method !== 'unlock_trusted') continue
+
+      // Unlocked event: values = [recipient, amount, burnNonce, burnId]
+      // (exact field order depends on contract — adjust if needed)
+      const unlockedEvent = receipt.events.find(e => e.event === 'Unlocked')
+      if (!unlockedEvent || unlockedEvent.values.length < 2) continue
+
+      const [recipient, amountRaw, burnNonceStr, burnId] = unlockedEvent.values
+
+      // Only include records where this address is the OCT recipient
+      if (recipient?.toLowerCase() !== octraAddress.toLowerCase()) continue
+
+      records.push({
+        direction:      'woct-to-oct',
+        ethTxHash:      '',                   // ETH tx hash not available from Octra side
+        blockNumber:    0,
+        timestamp:      (tx.timestamp as number) * 1000,
+        amountWoct:     (parseInt(amountRaw ?? '0') / Math.pow(10, OCT_DECIMALS)).toFixed(6),
+        amountRaw:      amountRaw ?? '0',
+        octraRecipient: recipient ?? octraAddress,
+        burnNonce:      parseInt(burnNonceStr ?? '0', 10),
+        burnId:         burnId ?? '',
+        status:         'confirmed',
+        octraTxHash:    tx.hash as string,
+      })
+    } catch { /* skip on error */ }
+  }
+
+  return records
 }
 
 /**

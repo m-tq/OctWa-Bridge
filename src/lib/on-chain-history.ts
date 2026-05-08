@@ -323,8 +323,6 @@ export interface BurnRecord {
   burnNonce: number
   burnId: string
   status: 'confirmed'   // burn is always confirmed if in logs
-  // Octra-side unlock tx (populated when fetched from Octra RPC)
-  octraTxHash?: string
 }
 
 async function getBlockTimestamp(blockHex: string): Promise<number> {
@@ -342,85 +340,14 @@ async function getBlockTimestamp(blockHex: string): Promise<number> {
 }
 
 /**
- * Fetch wOCT→OCT unlock history from the Octra side.
- * These are `unlock_trusted` calls made by the bridge relayer to the bridge
- * contract on Octra, crediting OCT back to the recipient after a wOCT burn.
- *
- * We filter by `to === OCTRA_BRIDGE_CONTRACT` and `encrypted_data === 'unlock_trusted'`,
- * then parse the `Unlocked` event from contract_receipt to get amount + recipient.
- *
- * Note: `from` on these txs is the relayer address, not the user. We match by
- * the `octraRecipient` field inside the Unlocked event.
- */
-export async function fetchUnlockHistory(
-  octraAddress: string,
-  rpcUrl: string,
-  limit = 20,
-): Promise<BurnRecord[]> {
-  // Fetch recent transactions TO the bridge contract — we need a broad scan
-  // because unlock_trusted is sent by the relayer (from != octraAddress).
-  // We use octra_transactionsByAddress on the bridge contract address to get
-  // all recent bridge activity, then filter by recipient == octraAddress.
-  const res = await fetch(`${rpcUrl}/rpc`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      jsonrpc: '2.0', id: 1,
-      method: 'octra_transactionsByAddress',
-      params: [OCTRA_BRIDGE_CONTRACT, 100, 0],
-    }),
-  })
-  const json = await res.json()
-  const txs: Array<Record<string, unknown>> = json.result?.transactions ?? []
-
-  // Filter to unlock_trusted calls only
-  const unlockTxs = txs.filter(tx =>
-    tx.op_type === 'call' &&
-    tx.encrypted_data === 'unlock_trusted'
-  )
-
-  // For each, get contract_receipt to find the Unlocked event and check recipient
-  const records: BurnRecord[] = []
-
-  for (const tx of unlockTxs.slice(0, 50)) {
-    if (records.length >= limit) break
-    try {
-      const receipt = await getContractReceipt(tx.hash as string)
-      if (!receipt?.success || receipt.method !== 'unlock_trusted') continue
-
-      // Unlocked event: values = [recipient, amount, burnNonce, burnId]
-      // (exact field order depends on contract — adjust if needed)
-      const unlockedEvent = receipt.events.find(e => e.event === 'Unlocked')
-      if (!unlockedEvent || unlockedEvent.values.length < 2) continue
-
-      const [recipient, amountRaw, burnNonceStr, burnId] = unlockedEvent.values
-
-      // Only include records where this address is the OCT recipient
-      if (recipient?.toLowerCase() !== octraAddress.toLowerCase()) continue
-
-      records.push({
-        direction:      'woct-to-oct',
-        ethTxHash:      '',                   // ETH tx hash not available from Octra side
-        blockNumber:    0,
-        timestamp:      (tx.timestamp as number) * 1000,
-        amountWoct:     (parseInt(amountRaw ?? '0') / Math.pow(10, OCT_DECIMALS)).toFixed(6),
-        amountRaw:      amountRaw ?? '0',
-        octraRecipient: recipient ?? octraAddress,
-        burnNonce:      parseInt(burnNonceStr ?? '0', 10),
-        burnId:         burnId ?? '',
-        status:         'confirmed',
-        octraTxHash:    tx.hash as string,
-      })
-    } catch { /* skip on error */ }
-  }
-
-  return records
-}
-
-/**
  * Fetch wOCT→OCT burn history for an EVM address.
  * Uses eth_getLogs to find BurnInitiated events where burner == evmAddress.
- * Looks back ~100,000 blocks (~2 weeks).
+ * Looks back ~200,000 blocks (~1 month) on the wOCT bridge contract.
+ *
+ * BurnInitiated event signature:
+ *   BurnInitiated(bytes32 indexed burnId, address indexed burner,
+ *                 string octraRecipient, uint256 amount, uint64 nonce)
+ *   topic0: keccak256("BurnInitiated(bytes32,address,string,uint256,uint64)")
  */
 export async function fetchBurnHistory(evmAddress: string): Promise<BurnRecord[]> {
   // Get current block
@@ -431,7 +358,8 @@ export async function fetchBurnHistory(evmAddress: string): Promise<BurnRecord[]
   })
   const blockJson = await blockRes.json()
   const latestBlock = parseInt(blockJson.result, 16)
-  const fromBlock = Math.max(0, latestBlock - 100_000)
+  // Look back ~200k blocks (~1 month) to catch older burns
+  const fromBlock = Math.max(0, latestBlock - 200_000)
 
   // burner is topic2 (index 1 in topics array after topic0)
   const burnerTopic = '0x' + evmAddress.slice(2).toLowerCase().padStart(64, '0')
@@ -451,9 +379,16 @@ export async function fetchBurnHistory(evmAddress: string): Promise<BurnRecord[]
     }),
   })
   const logsJson = await logsRes.json()
+
+  // eth_getLogs returns error object when range too large — fall back to smaller range
+  if (logsJson.error) {
+    console.warn('[bridge] eth_getLogs error:', logsJson.error.message)
+    return []
+  }
+
   const logs: Array<Record<string, unknown>> = logsJson.result ?? []
 
-  // Take last 20
+  // Take last 20, newest first
   const recent = logs.slice(-20).reverse()
 
   const abiCoder = ethers.AbiCoder.defaultAbiCoder()

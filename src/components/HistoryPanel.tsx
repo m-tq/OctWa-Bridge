@@ -7,7 +7,7 @@ import {
 import { cn, shortenAddress } from '@/lib/utils'
 import type { OctraSDK } from '@octwa/sdk'
 import type { BridgeTxRecord, BurnRecord } from '@/lib/on-chain-history'
-import { fetchBridgeHistory, fetchBurnHistory, fetchUnlockHistory, lookupTxHash } from '@/lib/on-chain-history'
+import { fetchBridgeHistory, fetchBurnHistory, lookupTxHash } from '@/lib/on-chain-history'
 import { claimWoctOnEthereum, refetchLockedEvent, waitForEpochOnEth } from '@/lib/bridge-service'
 import { getOctraRpc } from '@/lib/octra-rpc'
 import {
@@ -66,31 +66,13 @@ export function HistoryPanel({ octraAddress, evmAddress, sdk, onRequestCapabilit
     setLoading(true)
     setError(null)
     try {
-      const [lockData, burnData, unlockData] = await Promise.allSettled([
+      const [lockData, burnData] = await Promise.allSettled([
         octraAddress ? fetchBridgeHistory(octraAddress, getOctraRpc()) : Promise.resolve([]),
         evmAddress   ? fetchBurnHistory(evmAddress) : Promise.resolve([]),
-        octraAddress ? fetchUnlockHistory(octraAddress, getOctraRpc()) : Promise.resolve([]),
       ])
       if (lockData.status === 'fulfilled') setRecords(lockData.value)
-
-      // Merge ETH-side burns + Octra-side unlocks, deduplicate by burnNonce
-      const ethBurns   = burnData.status   === 'fulfilled' ? burnData.value   : []
-      const octraBurns = unlockData.status === 'fulfilled' ? unlockData.value : []
-
-      // Prefer ETH-side records (have ethTxHash); supplement with Octra-side
-      // records that don't have a matching ETH record (burnNonce match).
-      const merged = [...ethBurns]
-      for (const ob of octraBurns) {
-        const alreadyHave = ethBurns.some(
-          eb => ob.burnNonce !== 0 && eb.burnNonce === ob.burnNonce
-        )
-        if (!alreadyHave) merged.push(ob)
-      }
-      // Sort newest first
-      merged.sort((a, b) => b.timestamp - a.timestamp)
-      setBurnRecords(merged)
-
-      if (lockData.status === 'rejected' && burnData.status === 'rejected' && unlockData.status === 'rejected') {
+      if (burnData.status === 'fulfilled') setBurnRecords(burnData.value)
+      if (lockData.status === 'rejected' && burnData.status === 'rejected') {
         setError(lockData.reason?.message || 'Failed to load history')
       }
     } catch (e) {
@@ -461,7 +443,7 @@ export function HistoryPanel({ octraAddress, evmAddress, sdk, onRequestCapabilit
                   </div>
                 )}
                 {burnRecords.map(burn => (
-                  <div key={burn.ethTxHash || burn.octraTxHash || burn.burnNonce} className="border border-primary/20 p-3 text-xs">
+                  <div key={burn.ethTxHash} className="border border-primary/20 p-3 text-xs">
                     {/* Top: amount + status */}
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-2">
@@ -472,37 +454,23 @@ export function HistoryPanel({ octraAddress, evmAddress, sdk, onRequestCapabilit
                       </div>
                       <span className="text-[10px] px-1.5 py-0.5 border text-primary border-primary/30 flex items-center gap-1">
                         <CheckCircle2 size={9} />
-                        unlocked
+                        burned
                       </span>
                     </div>
 
                     {/* Tx info */}
                     <div className="space-y-1 text-muted-foreground">
-                      {burn.ethTxHash ? (
-                        <div className="flex items-center justify-between">
-                          <span className="text-[10px]">ETH TX <span className="text-muted-foreground/60">| Block: {burn.blockNumber.toLocaleString()}</span></span>
-                          <a
-                            href={`https://etherscan.io/tx/${burn.ethTxHash}`}
-                            target="_blank" rel="noopener noreferrer"
-                            className="flex items-center gap-1 hover-glow transition-all font-mono text-[10px]"
-                          >
-                            {shortenAddress(burn.ethTxHash, 8)}
-                            <ExternalLink size={9} />
-                          </a>
-                        </div>
-                      ) : burn.octraTxHash ? (
-                        <div className="flex items-center justify-between">
-                          <span className="text-[10px]">Octra TX</span>
-                          <a
-                            href={`https://octrascan.io/tx.html?hash=${burn.octraTxHash}`}
-                            target="_blank" rel="noopener noreferrer"
-                            className="flex items-center gap-1 hover-glow transition-all font-mono text-[10px]"
-                          >
-                            {shortenAddress(burn.octraTxHash, 8)}
-                            <ExternalLink size={9} />
-                          </a>
-                        </div>
-                      ) : null}
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px]">ETH TX <span className="text-muted-foreground/60">| Block: {burn.blockNumber.toLocaleString()}</span></span>
+                        <a
+                          href={`https://etherscan.io/tx/${burn.ethTxHash}`}
+                          target="_blank" rel="noopener noreferrer"
+                          className="flex items-center gap-1 hover-glow transition-all font-mono text-[10px]"
+                        >
+                          {shortenAddress(burn.ethTxHash, 8)}
+                          <ExternalLink size={9} />
+                        </a>
+                      </div>
                       <div className="flex items-center justify-between">
                         <span className="text-[10px]">OCT Recipient</span>
                         <span className="font-mono text-[10px]">{shortenAddress(burn.octraRecipient, 8)}</span>
@@ -513,8 +481,8 @@ export function HistoryPanel({ octraAddress, evmAddress, sdk, onRequestCapabilit
                     </div>
 
                     <div className="flex items-center gap-1 text-[10px] text-muted-foreground mt-2">
-                      <CheckCircle2 size={9} className="text-primary" />
-                      OCT unlocked to {shortenAddress(burn.octraRecipient, 6)}
+                      <Clock size={9} />
+                      OCT unlock processed automatically by bridge relayer
                     </div>
                   </div>
                 ))}

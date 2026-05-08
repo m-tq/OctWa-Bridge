@@ -342,7 +342,8 @@ async function getBlockTimestamp(blockHex: string): Promise<number> {
 /**
  * Fetch wOCT→OCT burn history for an EVM address.
  * Uses eth_getLogs to find BurnInitiated events where burner == evmAddress.
- * Looks back ~200,000 blocks (~1 month) on the wOCT bridge contract.
+ *
+ * Paginates in 50k-block chunks (public RPC limit) going back ~200k blocks.
  *
  * BurnInitiated event signature:
  *   BurnInitiated(bytes32 indexed burnId, address indexed burner,
@@ -358,38 +359,53 @@ export async function fetchBurnHistory(evmAddress: string): Promise<BurnRecord[]
   })
   const blockJson = await blockRes.json()
   const latestBlock = parseInt(blockJson.result, 16)
-  // Look back ~200k blocks (~1 month) to catch older burns
-  const fromBlock = Math.max(0, latestBlock - 200_000)
 
   // burner is topic2 (index 1 in topics array after topic0)
   const burnerTopic = '0x' + evmAddress.slice(2).toLowerCase().padStart(64, '0')
 
-  const logsRes = await fetch(ETH_RPC, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      jsonrpc: '2.0', id: 1,
-      method: 'eth_getLogs',
-      params: [{
-        address:   WOCT_CONTRACT_ADDRESS,
-        topics:    [BURN_INITIATED_TOPIC0, null, burnerTopic],
-        fromBlock: '0x' + fromBlock.toString(16),
-        toBlock:   'latest',
-      }],
-    }),
-  })
-  const logsJson = await logsRes.json()
+  // Paginate in 49k-block chunks (safely under the 50k limit)
+  // Go back ~200k blocks (~1 month), newest chunks first so we can stop early
+  const CHUNK = 49_000
+  const LOOKBACK = 200_000
+  const startBlock = Math.max(0, latestBlock - LOOKBACK)
 
-  // eth_getLogs returns error object when range too large — fall back to smaller range
-  if (logsJson.error) {
-    console.warn('[bridge] eth_getLogs error:', logsJson.error.message)
-    return []
+  // Build chunk ranges from newest to oldest
+  const chunks: Array<{ from: number; to: number }> = []
+  for (let to = latestBlock; to > startBlock; to -= CHUNK) {
+    chunks.push({ from: Math.max(startBlock, to - CHUNK + 1), to })
   }
 
-  const logs: Array<Record<string, unknown>> = logsJson.result ?? []
+  const allLogs: Array<Record<string, unknown>> = []
+
+  for (const chunk of chunks) {
+    // Stop once we have enough logs
+    if (allLogs.length >= 20) break
+
+    const res = await fetch(ETH_RPC, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 1,
+        method: 'eth_getLogs',
+        params: [{
+          address:   WOCT_CONTRACT_ADDRESS,
+          topics:    [BURN_INITIATED_TOPIC0, null, burnerTopic],
+          fromBlock: '0x' + chunk.from.toString(16),
+          toBlock:   '0x' + chunk.to.toString(16),
+        }],
+      }),
+    })
+    const json = await res.json()
+    if (json.error) {
+      console.warn('[bridge] eth_getLogs chunk error:', json.error.message)
+      continue
+    }
+    const logs: Array<Record<string, unknown>> = json.result ?? []
+    allLogs.push(...logs)
+  }
 
   // Take last 20, newest first
-  const recent = logs.slice(-20).reverse()
+  const recent = allLogs.slice(-20).reverse()
 
   const abiCoder = ethers.AbiCoder.defaultAbiCoder()
 

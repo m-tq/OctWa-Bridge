@@ -137,3 +137,28 @@ export async function isBridgePaused(): Promise<boolean> {
     return false
   }
 }
+
+/**
+ * Check whether a wOCT burn (identified by its on-chain `burnId` from the
+ * `BurnInitiated` event) has been processed on the Octra side via
+ * `unlock_trusted`. The bridge contract tracks each processed burn under
+ * the storage key `processed_unlocks:<burnId>` with value `"1"`.
+ *
+ * Direct storage lookup is much cheaper than `contract_call` for this —
+ * we know the exact key and don't need the contract to execute anything.
+ *
+ * Returns:
+ *   true  → relayer has called `unlock_trusted` and OCT was released
+ *   false → still pending (or unknown — we don't distinguish)
+ */
+export async function isBurnUnlocked(burnId: string): Promise<boolean> {
+  try {
+    const result = await rpc<{ key: string; value: string } | null>(
+      'octra_contractStorage',
+      [OCTRA_BRIDGE_CONTRACT, `processed_unlocks:${burnId}`],
+    )
+    return result?.value === '1'
+  } catch {
+    return false
+  }
+}

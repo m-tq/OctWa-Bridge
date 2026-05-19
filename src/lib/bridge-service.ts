@@ -241,6 +241,11 @@ export async function refetchLockedEvent(octraTxHash: string): Promise<LockedEve
  * the relayer never sees a valid `BurnInitiated` event, so OCT stays
  * locked on Octra forever.
  *
+ * The optional `onProgress` callback fires once for each of the two
+ * popups so callers can render "Step 1/2: approve" vs "Step 2/2: burn"
+ * in real time. Without it, the wallet shows two popups back-to-back
+ * with no UI hint to distinguish them.
+ *
  * Returns the burn tx hash. The caller can use it to track the unlock on
  * Octra (the relayer reacts to `BurnInitiated` and submits
  * `unlock_trusted` on the OCT bridge contract).
@@ -251,6 +256,7 @@ export async function burnWoctToOctra(
     octraRecipient: string
     amountWoct: string
   },
+  onProgress?: (step: 'approve' | 'burn', msg: string) => void,
 ): Promise<string> {
   const { octraRecipient, amountWoct } = params
 
@@ -268,6 +274,7 @@ export async function burnWoctToOctra(
     rawAmount,
   ])
 
+  onProgress?.('approve', 'Step 1/2 — approve wOCT spend in OctWa')
   const approveResult = await sdk.evm.sendTransaction({
     to:    WOCT_TOKEN_ADDRESS,
     data:  approveCalldata,
@@ -283,6 +290,7 @@ export async function burnWoctToOctra(
     rawAmount,
   ])
 
+  onProgress?.('burn', 'Step 2/2 — confirm burn in OctWa')
   const burnResult = await sdk.evm.sendTransaction({
     to:    WOCT_CONTRACT_ADDRESS,
     data:  burnCalldata,

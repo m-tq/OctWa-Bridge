@@ -165,16 +165,26 @@ export function BridgePanel({
 
     try {
       // The wallet popup opens twice — first for `approve`, then for `burnToOctra`.
-      // Show "approving" while the user signs the approve and the receipt
-      // settles; flip to "burning" right before the second popup so the
-      // tracker accurately reflects which transaction the user is being
-      // asked to confirm.
+      // Each step's progress is driven by the bridge-service callback so the
+      // tracker accurately reflects which transaction the user is being asked
+      // to confirm in real time.
       setStep('approving')
-      setProgressMsg('Approve wOCT spend in OctWa, then confirm the burn...')
-      const ethHash = await burnWoctToOctra(sdk, {
-        octraRecipient: octraAddress,
-        amountWoct:     amount,
-      })
+      const ethHash = await burnWoctToOctra(
+        sdk,
+        {
+          octraRecipient: octraAddress,
+          amountWoct:     amount,
+        },
+        (step, msg) => {
+          if (step === 'approve') {
+            setStep('approving')
+            setProgressMsg(msg)
+          } else {
+            setStep('burning')
+            setProgressMsg(msg)
+          }
+        },
+      )
 
       setStep('burning', { ethTxHash: ethHash })
       setProgressMsg('wOCT burned. Bridge relayer will unlock OCT on Octra (~2 min)...')

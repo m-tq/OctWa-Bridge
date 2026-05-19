@@ -24,7 +24,7 @@ import {
   BRIDGE_TOKEN_ID,
   OCT_DECIMALS,
 } from './constants'
-import { getContractReceipt } from './octra-rpc'
+import { getContractReceipt, isBurnUnlocked } from './octra-rpc'
 
 const INFURA_KEY = import.meta.env.VITE_INFURA_API_KEY || ''
 const PUBLIC_ETH_RPC = 'https://ethereum.publicnode.com'
@@ -322,7 +322,16 @@ export interface BurnRecord {
   octraRecipient: string
   burnNonce: number
   burnId: string
-  status: 'confirmed'   // burn is always confirmed if in logs
+  /**
+   * `confirmed` — burn tx is on-chain, but the relayer hasn't released OCT yet
+   * `unlocked`  — relayer has called `unlock_trusted` on Octra (OCT delivered)
+   *
+   * The status is computed by reading `processed_unlocks:<burnId>` from the
+   * Octra bridge contract. A burn that's been waiting longer than ~30 min
+   * with status still `confirmed` is effectively stuck and needs operator
+   * attention.
+   */
+  status: 'confirmed' | 'unlocked'
 }
 
 async function getBlockTimestamp(blockHex: string): Promise<number> {
@@ -427,7 +436,13 @@ export async function fetchBurnHistory(evmAddress: string): Promise<BurnRecord[]
     } catch { /* ignore decode errors */ }
 
     const blockNumber = parseInt(blockHex, 16)
-    const timestamp   = await getBlockTimestamp(blockHex)
+    const burnId      = topics[1] ?? ''
+
+    // Parallelise per-burn metadata: block timestamp + relayer-side unlock status
+    const [timestamp, unlocked] = await Promise.all([
+      getBlockTimestamp(blockHex),
+      burnId ? isBurnUnlocked(burnId) : Promise.resolve(false),
+    ])
 
     return {
       direction:      'woct-to-oct' as const,
@@ -438,8 +453,8 @@ export async function fetchBurnHistory(evmAddress: string): Promise<BurnRecord[]
       amountRaw,
       octraRecipient,
       burnNonce,
-      burnId:         topics[1] ?? '',
-      status:         'confirmed' as const,
+      burnId,
+      status:         unlocked ? 'unlocked' as const : 'confirmed' as const,
     }
   }))
 

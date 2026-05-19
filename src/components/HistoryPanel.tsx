@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   ExternalLink, ArrowRight, RefreshCw, Loader2,
   CheckCircle2, Zap, Clock, Search, AlertCircle,
+  Copy, Check,
 } from 'lucide-react'
 import { cn, shortenAddress } from '@/lib/utils'
 import type { OctraSDK } from '@octwa/sdk'
@@ -411,49 +412,133 @@ export function HistoryPanel({ octraAddress, evmAddress, sdk }: HistoryPanelProp
               {burnRecords.length === 0 ? (
                 <p className="text-[10px] text-muted-foreground/60 text-center py-4">No burns found.</p>
               ) : (
-                burnRecords.map(burn => (
-                  <div key={burn.ethTxHash} className="border border-primary/20 p-2.5 text-[11px] space-y-1.5">
-                    {/* Amount + badge */}
-                    <div className="flex items-center justify-between gap-1">
-                      <span className="font-medium truncate">{burn.amountWoct} wOCT</span>
-                      <span className="text-[9px] px-1 py-0.5 border text-primary border-primary/30 flex items-center gap-0.5 shrink-0">
-                        <CheckCircle2 size={8} />burned
-                      </span>
-                    </div>
+                burnRecords.map(burn => {
+                  const isUnlocked = burn.status === 'unlocked'
+                  const ageMs      = Date.now() - burn.timestamp
+                  // Relayer typically processes within ~5–15 min; flag as stuck after 30 min
+                  const isStuck    = !isUnlocked && ageMs > 30 * 60 * 1000
 
-                    {/* ETH tx link + block */}
-                    <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-                      <span className="text-muted-foreground/60">#{burn.blockNumber.toLocaleString()}</span>
-                      <a
-                        href={`https://etherscan.io/tx/${burn.ethTxHash}`}
-                        target="_blank" rel="noopener noreferrer"
-                        className="flex items-center gap-0.5 hover-glow transition-all font-mono"
-                      >
-                        {shortenAddress(burn.ethTxHash, 6)}<ExternalLink size={8} />
-                      </a>
-                    </div>
+                  const supportPayload = [
+                    `wOCT→OCT bridge — stuck burn`,
+                    `ETH tx:    https://etherscan.io/tx/${burn.ethTxHash}`,
+                    `block:     ${burn.blockNumber}`,
+                    `burnId:    ${burn.burnId}`,
+                    `nonce:     ${burn.burnNonce}`,
+                    `amount:    ${burn.amountWoct} wOCT`,
+                    `recipient: ${burn.octraRecipient}`,
+                    `submitted: ${new Date(burn.timestamp).toISOString()}`,
+                  ].join('\n')
 
-                    {/* OCT recipient */}
-                    <div className="text-[10px] text-muted-foreground/60 font-mono truncate">
-                      → {shortenAddress(burn.octraRecipient, 8)}
-                    </div>
+                  const badgeClass = isUnlocked
+                    ? 'text-primary border-primary/30'
+                    : isStuck
+                    ? 'text-yellow-500 border-yellow-500/30'
+                    : 'text-muted-foreground border-border'
 
-                    {/* Timestamp */}
-                    <div className="text-[9px] text-muted-foreground/50">
-                      {new Date(burn.timestamp).toLocaleString()}
-                    </div>
+                  const badgeText = isUnlocked ? 'unlocked' : isStuck ? 'stuck' : 'pending unlock'
 
-                    <div className="flex items-center gap-1 text-[9px] text-muted-foreground">
-                      <Clock size={8} />OCT unlocked by relayer
+                  const containerClass = cn(
+                    'border p-2.5 text-[11px] space-y-1.5',
+                    isUnlocked ? 'border-primary/20'
+                    : isStuck   ? 'border-yellow-500/30'
+                    : 'border-border',
+                  )
+
+                  return (
+                    <div key={burn.ethTxHash} className={containerClass}>
+                      {/* Amount + status badge */}
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="font-medium truncate">{burn.amountWoct} wOCT</span>
+                        <span className={cn('text-[9px] px-1 py-0.5 border flex items-center gap-0.5 shrink-0', badgeClass)}>
+                          {isUnlocked ? <CheckCircle2 size={8} />
+                          : isStuck   ? <AlertCircle size={8} />
+                          :             <Clock size={8} />}
+                          {badgeText}
+                        </span>
+                      </div>
+
+                      {/* ETH tx link + block */}
+                      <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                        <span className="text-muted-foreground/60">#{burn.blockNumber.toLocaleString()}</span>
+                        <a
+                          href={`https://etherscan.io/tx/${burn.ethTxHash}`}
+                          target="_blank" rel="noopener noreferrer"
+                          className="flex items-center gap-0.5 hover-glow transition-all font-mono"
+                        >
+                          {shortenAddress(burn.ethTxHash, 6)}<ExternalLink size={8} />
+                        </a>
+                      </div>
+
+                      {/* OCT recipient */}
+                      <div className="text-[10px] text-muted-foreground/60 font-mono truncate">
+                        → {shortenAddress(burn.octraRecipient, 8)}
+                      </div>
+
+                      {/* Timestamp */}
+                      <div className="text-[9px] text-muted-foreground/50">
+                        {new Date(burn.timestamp).toLocaleString()}
+                      </div>
+
+                      {/* Status footer */}
+                      {isUnlocked ? (
+                        <div className="flex items-center gap-1 text-[9px] text-primary">
+                          <CheckCircle2 size={8} />
+                          OCT delivered to {shortenAddress(burn.octraRecipient, 5)}
+                        </div>
+                      ) : isStuck ? (
+                        <StuckBurnHelper supportPayload={supportPayload} />
+                      ) : (
+                        <div className="flex items-center gap-1 text-[9px] text-muted-foreground">
+                          <Loader2 size={8} className="animate-spin shrink-0" />
+                          waiting for relayer to call unlock_trusted
+                        </div>
+                      )}
                     </div>
-                  </div>
-                ))
+                  )
+                })
               )}
             </div>
 
           </div>
         )}
       </motion.div>
+    </div>
+  )
+}
+
+/**
+ * Stuck-burn helper — surfaces the diagnostic info a user needs to ask
+ * the bridge operator to manually trigger `unlock_trusted` on Octra.
+ *
+ * The OCT bridge contract restricts `unlock_trusted` to the trusted relayer
+ * key, so users cannot recover stuck burns themselves. The most useful thing
+ * the UI can do is package the burn metadata into a single copy-paste blob
+ * so support can verify the burn and re-trigger unlock without requiring
+ * a back-and-forth.
+ */
+function StuckBurnHelper({ supportPayload }: { supportPayload: string }) {
+  const [copied, setCopied] = useState(false)
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(supportPayload)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch { /* clipboard blocked */ }
+  }
+  return (
+    <div className="space-y-1 pt-0.5">
+      <div className="flex items-start gap-1 text-[9px] text-yellow-500">
+        <AlertCircle size={8} className="shrink-0 mt-px" />
+        <span>
+          Relayer hasn&apos;t processed this burn. <code className="font-mono">unlock_trusted</code> is admin-only — contact support with the details below.
+        </span>
+      </div>
+      <button
+        onClick={handleCopy}
+        className="w-full flex items-center justify-center gap-1 py-1 text-[10px] font-medium border border-yellow-500/40 text-yellow-500 hover:opacity-80 transition-opacity"
+      >
+        {copied ? <><Check size={9} />Copied</> : <><Copy size={9} />Copy support details</>}
+      </button>
     </div>
   )
 }

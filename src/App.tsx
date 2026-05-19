@@ -116,7 +116,6 @@ function AppContent() {
     connect,
     disconnect,
     refreshBalances,
-    requestCapability,
     clearError,
   } = useWallets()
 
@@ -251,7 +250,6 @@ function AppContent() {
                 onRefreshBalances={refreshBalances}
                 onConnect={connect}
                 sdk={sdk}
-                onRequestCapability={requestCapability}
               />
             </motion.div>
           )}
@@ -261,7 +259,6 @@ function AppContent() {
                 octraAddress={octraAddress}
                 evmAddress={evmAddress}
                 sdk={sdk}
-                onRequestCapability={requestCapability}
               />
             </motion.div>
           )}

@@ -1,17 +1,32 @@
-import { useState, useCallback, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ethers } from 'ethers'
 import { OctraSDK } from '@octwa/sdk'
-import type { Capability } from '@octwa/sdk'
 import { getWoctBalance } from '@/lib/bridge-service'
 
 const INFURA_KEY = import.meta.env.VITE_INFURA_API_KEY || ''
 // Public RPC fallback for read-only EVM calls (balance, eth_call).
 // publicnode.com: no key required, no CORS restriction, reliable.
-// llamarpc.com: fallback if publicnode is down.
 const PUBLIC_ETH_RPC = 'https://ethereum.publicnode.com'
 const ETH_MAINNET_RPC = INFURA_KEY
   ? `https://mainnet.infura.io/v3/${INFURA_KEY}`
   : PUBLIC_ETH_RPC
+
+/**
+ * Permissions the bridge needs from the wallet.
+ *
+ *   read_address       — discover the connected Octra address
+ *   read_balance       — refresh the OCT balance via RPC pass-through
+ *   contract_calls     — sendContractTransaction(lock_to_eth, …)
+ *   send_transactions  — sign / submit base transactions; also accepted by the
+ *                        wallet as a fallback for EVM signing operations,
+ *                        so a single grant covers both chains.
+ */
+const REQUIRED_PERMISSIONS = [
+  'read_address',
+  'read_balance',
+  'contract_calls',
+  'send_transactions',
+] as const
 
 export interface WalletState {
   octraAddress?: string
@@ -29,13 +44,13 @@ export interface WalletState {
 /**
  * useWallets — manages OctWa wallet connection for the bridge.
  *
- * Uses @octwa/sdk v1.3.4 for:
- *   - Provider detection
- *   - connect() / disconnect() lifecycle
- *   - getBalance() — OCT balance via SDK capability (no direct RPC)
- *   - requestCapability() — exposed for BridgePanel / HistoryPanel
+ * Built against `@octwa/sdk@2.1.0` (RFC-O-1):
+ *   - `connect()` opens the approval popup and returns the active address
+ *   - `evm.getDerivedAddress()` resolves the matching 0x address (same key)
+ *   - `rpc('octra_balance', […])` fetches the OCT balance
  *
- * ETH / wOCT balances still use ethers.js directly (EVM side).
+ * EVM (ETH and wOCT) balances continue to use ethers directly — read-only
+ * RPC calls don't need a wallet round-trip.
  */
 export function useWallets() {
   const [state, setState] = useState<WalletState>({
@@ -45,9 +60,7 @@ export function useWallets() {
     connectError: null,
   })
 
-  const sdkRef  = useRef<OctraSDK | null>(null)
-  // Read capability for balance fetching — reused across refreshes
-  const readCapRef = useRef<Capability | null>(null)
+  const sdkRef = useRef<OctraSDK | null>(null)
 
   const clearError = useCallback(() => {
     setState(s => ({ ...s, connectError: null }))
@@ -58,6 +71,26 @@ export function useWallets() {
     const sdk = await OctraSDK.init({ timeout: 3000 })
     sdkRef.current = sdk
     return sdk
+  }, [])
+
+  const refreshBalancesInternal = useCallback(async (
+    sdk: OctraSDK,
+    octraAddr: string,
+    evmAddr: string,
+    provider: ethers.JsonRpcProvider,
+  ) => {
+    const [octResult, ethResult, woctResult] = await Promise.allSettled([
+      sdk.rpc<{ balance: string }>('octra_balance', [octraAddr])
+        .then(r => parseFloat(r.balance).toFixed(6)),
+      provider.getBalance(evmAddr).then(wei => ethers.formatEther(wei)),
+      getWoctBalance(evmAddr, provider),
+    ])
+    setState(s => ({
+      ...s,
+      octBalance:  octResult.status  === 'fulfilled' ? octResult.value  : s.octBalance,
+      ethBalance:  ethResult.status  === 'fulfilled' ? ethResult.value  : s.ethBalance,
+      woctBalance: woctResult.status === 'fulfilled' ? woctResult.value : s.woctBalance,
+    }))
   }, [])
 
   const connect = useCallback(async () => {
@@ -75,31 +108,19 @@ export function useWallets() {
         return
       }
 
-      try { await sdk.disconnect() } catch { /* ignore */ }
-      await new Promise(r => setTimeout(r, 200))
-
-      const conn = await sdk.connect({
-        circle:    'oct-bridge',
-        appOrigin: window.location.origin,
-        appName:   'OctWa Bridge',
+      // Request the full permission set in one connect approval — this is the
+      // user-facing prompt. RFC-O-1 lets us bundle all needed scopes here.
+      const accounts = await sdk.connect({
+        permissions: [...REQUIRED_PERMISSIONS],
       })
+      const octraAddress = accounts[0]
+      if (!octraAddress) throw new Error('Wallet returned no accounts')
 
-      const octraAddress = conn.walletPubKey
-      const evmAddress   = conn.evmAddress
-
+      // Resolve the derived 0x address from the same BIP39 seed.
+      const evmAddress = await sdk.evm.getDerivedAddress()
       if (!evmAddress) {
-        throw new Error('Wallet did not return an EVM address. Please update your OctWa extension.')
+        throw new Error('Wallet did not return an EVM address. Please update OctWa.')
       }
-
-      // Request a read capability for balance fetching
-      const readCap = await sdk.requestCapability({
-        circle:    'oct-bridge',
-        methods:   ['get_balance'],
-        scope:     'read',
-        encrypted: false,
-        ttlSeconds: 3600,
-      })
-      readCapRef.current = readCap
 
       const provider = new ethers.JsonRpcProvider(ETH_MAINNET_RPC)
 
@@ -117,7 +138,7 @@ export function useWallets() {
         woctBalance:    undefined,
       }))
 
-      await refreshBalancesInternal(sdk, readCap, octraAddress, evmAddress, provider)
+      await refreshBalancesInternal(sdk, octraAddress, evmAddress, provider)
       setState(s => ({ ...s, balanceLoading: false }))
     } catch (err) {
       console.error('[Bridge] Connect failed:', err)
@@ -127,14 +148,21 @@ export function useWallets() {
         connectError: err instanceof Error ? err.message : String(err),
       }))
     }
-  }, [getSDK])
+  }, [getSDK, refreshBalancesInternal])
 
   const disconnect = useCallback(async () => {
+    // Revoke the session at the wallet so reconnecting opens the
+    // approval popup again — without this the wallet would short-circuit
+    // and silently re-use the previous wallet selection.
     try {
       const sdk = sdkRef.current
-      if (sdk) await sdk.disconnect()
-    } catch { /* ignore */ }
-    readCapRef.current = null
+      if (sdk?.isInstalled()) {
+        await sdk.disconnect()
+      }
+    } catch (err) {
+      console.warn('[Bridge] Disconnect error:', err)
+    }
+
     setState({
       loading:        false,
       balanceLoading: false,
@@ -146,53 +174,44 @@ export function useWallets() {
     })
   }, [])
 
-  const requestCapability = useCallback(async (params: {
-    methods: string[]
-    scope: 'read' | 'write' | 'compute'
-    encrypted: boolean
-    ttlSeconds?: number
-  }): Promise<Capability> => {
-    const sdk = await getSDK()
-    if (!sdk.isInstalled()) throw new Error('OctWa extension not found')
-    return sdk.requestCapability({ circle: 'oct-bridge', ...params })
-  }, [getSDK])
-
-  /**
-   * Fetch OCT balance via SDK getBalance(), ETH and wOCT via ethers.
-   */
-  const refreshBalancesInternal = async (
-    sdk: OctraSDK,
-    readCap: Capability,
-    octraAddr: string,
-    evmAddr: string,
-    provider: ethers.JsonRpcProvider
-  ) => {
-    const [octResult, ethResult, woctResult] = await Promise.allSettled([
-      sdk.getBalance(readCap.id).then(b => b.octBalance.toFixed(6)),
-      provider.getBalance(evmAddr).then(wei => ethers.formatEther(wei)),
-      getWoctBalance(evmAddr, provider),
-    ])
-    setState(s => ({
-      ...s,
-      octBalance:  octResult.status  === 'fulfilled' ? octResult.value  : s.octBalance,
-      ethBalance:  ethResult.status  === 'fulfilled' ? ethResult.value  : s.ethBalance,
-      woctBalance: woctResult.status === 'fulfilled' ? woctResult.value : s.woctBalance,
-    }))
-  }
-
   const refreshBalances = useCallback(async () => {
     const { octraAddress, evmAddress, ethProvider } = state
-    if (!octraAddress || !evmAddress || !ethProvider) return
     const sdk = sdkRef.current
-    const readCap = readCapRef.current
-    if (!sdk || !readCap) return
+    if (!sdk || !octraAddress || !evmAddress || !ethProvider) return
     setState(s => ({ ...s, balanceLoading: true }))
     try {
-      await refreshBalancesInternal(sdk, readCap, octraAddress, evmAddress, ethProvider)
+      await refreshBalancesInternal(sdk, octraAddress, evmAddress, ethProvider)
     } finally {
       setState(s => ({ ...s, balanceLoading: false }))
     }
-  }, [state])
+  }, [state, refreshBalancesInternal])
+
+  // React to wallet-driven account / disconnect events.
+  useEffect(() => {
+    const sdk = sdkRef.current
+    if (!sdk?.isInstalled()) return
+
+    const onAccountsChanged = (...args: unknown[]) => {
+      const accounts = (args[0] as string[] | undefined) ?? []
+      if (accounts.length === 0) {
+        // user revoked or locked
+        void disconnect()
+      } else if (state.octraAddress && accounts[0] !== state.octraAddress) {
+        // active account changed in the wallet — re-derive everything
+        void connect()
+      }
+    }
+
+    const onDisconnect = () => { void disconnect() }
+
+    sdk.on('accountsChanged', onAccountsChanged)
+    sdk.on('disconnect', onDisconnect)
+
+    return () => {
+      sdk.removeListener('accountsChanged', onAccountsChanged)
+      sdk.removeListener('disconnect', onDisconnect)
+    }
+  }, [state.octraAddress, connect, disconnect])
 
   return {
     ...state,
@@ -200,7 +219,6 @@ export function useWallets() {
     connect,
     disconnect,
     refreshBalances,
-    requestCapability,
     clearError,
   }
 }

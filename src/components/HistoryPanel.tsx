@@ -24,12 +24,6 @@ interface HistoryPanelProps {
   octraAddress?: string
   evmAddress?: string
   sdk: OctraSDK | null
-  onRequestCapability: (params: {
-    methods: string[]
-    scope: 'read' | 'write' | 'compute'
-    encrypted: boolean
-    ttlSeconds?: number
-  }) => Promise<import('@octwa/sdk').Capability>
 }
 
 const STATUS_LABEL: Record<BridgeTxRecord['claimStatus'], string> = {
@@ -46,7 +40,7 @@ const STATUS_CLASS: Record<BridgeTxRecord['claimStatus'], string> = {
   unknown:       'text-muted-foreground border-border',
 }
 
-export function HistoryPanel({ octraAddress, evmAddress, sdk, onRequestCapability }: HistoryPanelProps) {
+export function HistoryPanel({ octraAddress, evmAddress, sdk }: HistoryPanelProps) {
   const [records, setRecords]         = useState<BridgeTxRecord[]>([])
   const [burnRecords, setBurnRecords] = useState<BurnRecord[]>([])
   const [loading, setLoading]         = useState(false)
@@ -85,7 +79,7 @@ export function HistoryPanel({ octraAddress, evmAddress, sdk, onRequestCapabilit
   useEffect(() => { load() }, [load])
 
   const handleClaim = useCallback(async (rec: BridgeTxRecord, force = false) => {
-    if (!window.octra) return
+    if (!sdk) return
 
     if (!force) {
       const existing = getPendingClaim(rec.octraTxHash)
@@ -116,16 +110,12 @@ export function HistoryPanel({ octraAddress, evmAddress, sdk, onRequestCapabilit
 
       if (rec.claimStatus === 'epoch_pending') {
         await waitForEpochOnEth(lockedData.epoch, msg =>
-          setClaimProg(p => ({ ...p, [rec.octraTxHash]: msg }))
+          setClaimProg(p => ({ ...p, [rec.octraTxHash]: msg })),
         )
       }
 
-      setClaimProg(p => ({ ...p, [rec.octraTxHash]: 'Requesting capability...' }))
-      const cap = await onRequestCapability({ methods: ['send_evm_transaction'], scope: 'write', encrypted: false })
-
       setClaimProg(p => ({ ...p, [rec.octraTxHash]: 'Confirm in OctWa...' }))
-      if (!sdk) throw new Error('Wallet not connected')
-      const ethHash = await claimWoctOnEthereum(sdk, lockedData, cap.id)
+      const ethHash = await claimWoctOnEthereum(sdk, lockedData)
 
       storePendingClaim(rec.octraTxHash, ethHash)
       setClaimProg(p => ({ ...p, [rec.octraTxHash]: `Submitted: ${ethHash.slice(0, 10)}...` }))
@@ -138,7 +128,7 @@ export function HistoryPanel({ octraAddress, evmAddress, sdk, onRequestCapabilit
     } finally {
       setClaiming(null)
     }
-  }, [load])
+  }, [load, sdk])
 
   const pollConfirmation = useCallback((octraTxHash: string, ethTxHash: string) => {
     const maxAttempts = 40

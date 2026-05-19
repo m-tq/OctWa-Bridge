@@ -16,7 +16,7 @@ import {
   burnWoctToOctra,
 } from '@/lib/bridge-service'
 import { storePendingClaim } from '@/lib/pending-claims'
-import type { OctraSDK, Capability } from '@octwa/sdk'
+import type { OctraSDK } from '@octwa/sdk'
 
 const FEE_RESERVE_OCT = 0.01
 const MIN_ETH_FOR_GAS = (130_000 * 2) / 1e9
@@ -31,12 +31,6 @@ interface BridgePanelProps {
   onRefreshBalances: () => void
   onConnect: () => void
   sdk: OctraSDK | null
-  onRequestCapability: (params: {
-    methods: string[]
-    scope: 'read' | 'write' | 'compute'
-    encrypted: boolean
-    ttlSeconds?: number
-  }) => Promise<Capability>
 }
 
 const STEP_LABELS: Record<BridgeStep, string> = {
@@ -78,7 +72,6 @@ export function BridgePanel({
   onRefreshBalances,
   onConnect,
   sdk,
-  onRequestCapability,
 }: BridgePanelProps) {
   const [direction, setDirection] = useState<BridgeDirection>('oct-to-woct')
   const [amount, setAmount]       = useState('')
@@ -138,20 +131,10 @@ export function BridgePanel({
 
     try {
       setStep('locking')
-      setProgressMsg('Requesting capability from OctWa...')
-      const cap = await onRequestCapability({
-        methods:   ['send_transaction', 'send_evm_transaction'],
-        scope:     'write',
-        encrypted: false,
-      })
-
       setProgressMsg('Confirm the lock transaction in your OctWa wallet...')
       const lockResult = await lockOctOnOctra(sdk, {
-        octraAddress,
         ethRecipient: evmAddress,
         amountOct:    amount,
-        capabilityId: cap.id,
-        nonce:        cap.nonceBase + 1,
       })
       setStep('waiting_epoch', { octraTxHash: lockResult.hash })
 
@@ -162,7 +145,7 @@ export function BridgePanel({
       await waitForEpochOnEth(lockedData.epoch, msg => setProgressMsg(msg))
 
       setProgressMsg('Confirm the verifyAndMint transaction in OctWa...')
-      const ethHash = await claimWoctOnEthereum(sdk, lockedData, cap.id)
+      const ethHash = await claimWoctOnEthereum(sdk, lockedData)
 
       storePendingClaim(lockResult.hash, ethHash)
       setStep('done', { ethTxHash: ethHash })
@@ -172,7 +155,7 @@ export function BridgePanel({
       setStep('error', { error: err instanceof Error ? err.message : String(err) })
       setProgressMsg('')
     }
-  }, [amount, octraAddress, evmAddress, sdk, onRefreshBalances, onRequestCapability])
+  }, [amount, octraAddress, evmAddress, sdk, onRefreshBalances])
 
   const handleWoctToOct = useCallback(async () => {
     if (!octraAddress || !evmAddress) return
@@ -181,19 +164,10 @@ export function BridgePanel({
 
     try {
       setStep('burning')
-      setProgressMsg('Requesting write capability from OctWa...')
-      const cap = await onRequestCapability({
-        methods:   ['send_evm_transaction'],
-        scope:     'write',
-        encrypted: false,
-      })
-
       setProgressMsg('Confirm the burnToOctra transaction in OctWa...')
       const ethHash = await burnWoctToOctra(sdk, {
         octraRecipient: octraAddress,
         amountWoct:     amount,
-        capabilityId:   cap.id,
-        nonce:          Date.now(),
       })
 
       setStep('unlocking', { ethTxHash: ethHash })
@@ -205,7 +179,7 @@ export function BridgePanel({
       setStep('error', { error: err instanceof Error ? err.message : String(err) })
       setProgressMsg('')
     }
-  }, [amount, octraAddress, evmAddress, sdk, onRefreshBalances, onRequestCapability])
+  }, [amount, octraAddress, evmAddress, sdk, onRefreshBalances])
 
   const handleBridge = useCallback(() => {
     if (!amount || amountNum <= 0 || amountError) return

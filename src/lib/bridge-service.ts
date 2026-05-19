@@ -1,10 +1,13 @@
 /**
  * Bridge Service — OCT (Octra) ↔ wOCT (Ethereum)
  *
- * All functions receive the connected OctraSDK instance as a parameter.
- * There is NO module-level SDK instance here — the single connected instance
- * lives in useWallets.ts (sdkRef) and is passed down to these functions.
- * This ensures all SDK calls share the same connection and capability state.
+ * All write paths receive the connected `OctraSDK` instance from the caller.
+ * The hook in `useWallets.ts` owns the only SDK reference; this module is a
+ * pure set of building blocks invoked by `BridgePanel` and `HistoryPanel`.
+ *
+ * The bridge is RFC-O-1 compliant — it uses the typed wallet methods
+ * (`sendContractTransaction`, `evm.sendTransaction`) rather than the legacy
+ * capability/invoke API.
  */
 
 import { ethers } from 'ethers'
@@ -26,7 +29,6 @@ import {
 } from './constants'
 import type { OctraSDK } from '@octwa/sdk'
 import {
-  getBalance,
   waitForConfirmation,
   getContractReceipt,
 } from './octra-rpc'
@@ -34,8 +36,6 @@ import type { LockedEventData, OctraTxResult } from './types'
 import { toRawUnits } from './utils'
 
 const INFURA_KEY = import.meta.env.VITE_INFURA_API_KEY || ''
-// Public RPC fallback for read-only EVM calls (balance, eth_call).
-// publicnode.com: no key required, no CORS restriction, reliable.
 const PUBLIC_ETH_RPC = 'https://ethereum.publicnode.com'
 const ETH_RPC_URL = INFURA_KEY
   ? `https://mainnet.infura.io/v3/${INFURA_KEY}`
@@ -44,47 +44,48 @@ const ETH_RPC_URL = INFURA_KEY
 // ─── OCT → wOCT ──────────────────────────────────────────────────────────────
 
 /**
- * Step 1: Lock OCT on Octra via SDK sendContractCall.
+ * Step 1: Lock OCT on Octra via the RFC-O-1 contract method.
  *
- * Wire format (matches Octra node):
+ * The wallet popup converts these params into the on-chain transaction:
  *   op_type:        'call'
- *   encrypted_data: 'lock_to_eth'       ← plain method name
- *   message:        '["0xEthAddr"]'     ← params as JSON array string
+ *   encrypted_data: 'lock_to_eth'        (method name)
+ *   message:        '["0xEthAddr"]'      (positional params, JSON array)
+ *   amount:         raw OU as string     (1 OCT = 1_000_000)
  */
 export async function lockOctOnOctra(
   sdk: OctraSDK,
   params: {
-    octraAddress: string
     ethRecipient: string
     amountOct: string
-    capabilityId: string
-    nonce: number
-  }
+  },
 ): Promise<OctraTxResult> {
-  const { ethRecipient, amountOct, capabilityId } = params
+  const { ethRecipient, amountOct } = params
 
   if (!ethers.isAddress(ethRecipient)) throw new Error('Invalid Ethereum address')
 
   const rawAmount = toRawUnits(amountOct, OCT_DECIMALS)
   if (rawAmount <= 0n) throw new Error('Amount must be greater than 0')
 
-  const result = await sdk.sendContractCall(capabilityId, {
-    contract: OCTRA_BRIDGE_CONTRACT,
-    method:   OCTRA_LOCK_METHOD,
-    params:   [ethRecipient],
-    amount:   parseFloat(amountOct),
+  const result = await sdk.sendContractTransaction({
+    address: OCTRA_BRIDGE_CONTRACT,
+    method:  OCTRA_LOCK_METHOD,
+    params:  [ethRecipient],
+    amount:  rawAmount.toString(),
   })
 
-  return { hash: result.txHash }
+  return {
+    hash:  result.hash,
+    nonce: result.nonce,
+  }
 }
 
 /**
- * Step 2: Wait for confirmation + extract Locked event from contract_receipt.
- * Uses Octra RPC directly — no SDK needed here.
+ * Step 2: Wait for confirmation on Octra and extract the Locked event from
+ * the contract receipt. Uses the Octra RPC directly — no wallet needed.
  */
 export async function waitForLockedEvent(
   octraTxHash: string,
-  onProgress?: (msg: string) => void
+  onProgress?: (msg: string) => void,
 ): Promise<LockedEventData> {
   onProgress?.('Waiting for Octra transaction confirmation...')
 
@@ -106,20 +107,21 @@ export async function waitForLockedEvent(
     from,
     amountRaw: BigInt(amountRawStr),
     ethAddress,
-    srcNonce: parseInt(nonceStr, 10),
-    epoch: receipt.epoch,
-    txHash: octraTxHash,
+    srcNonce:  parseInt(nonceStr, 10),
+    epoch:     receipt.epoch,
+    txHash:    octraTxHash,
   }
 }
 
 /**
- * Step 3: Call verifyAndMint on Ethereum via SDK sendEvmTransaction.
- * Encodes calldata locally, sends via extension (wallet's secp256k1 key).
+ * Step 3: Call `verifyAndMint` on Ethereum via the EVM bridge.
+ *
+ * The wallet's secp256k1 key (derived from the same BIP39 seed) signs the tx
+ * inside the popup. We just hand it the encoded calldata and target address.
  */
 export async function claimWoctOnEthereum(
   sdk: OctraSDK,
   lockedData: LockedEventData,
-  capabilityId: string,
 ): Promise<string> {
   const iface = new ethers.Interface(WOCT_ABI as ethers.InterfaceAbi)
 
@@ -141,21 +143,22 @@ export async function claimWoctOnEthereum(
     0,
   ])
 
-  const result = await sdk.sendEvmTransaction(capabilityId, {
-    to:   WOCT_CONTRACT_ADDRESS,
-    data: calldata,
+  const result = await sdk.evm.sendTransaction({
+    to:    WOCT_CONTRACT_ADDRESS,
+    data:  calldata,
+    value: '0',
   })
 
-  return result.txHash
+  return result.hash
 }
 
 /**
- * Step 2b: Wait until the ETH lightClient has indexed our lock epoch.
- * Pure fetch — no SDK needed.
+ * Step 2b: Wait until the ETH lightClient has indexed the lock epoch.
+ * Pure read against an Ethereum RPC — does not touch the wallet.
  */
 export async function waitForEpochOnEth(
   lockEpoch: number,
-  onProgress?: (msg: string) => void
+  onProgress?: (msg: string) => void,
 ): Promise<void> {
   const LC_ADDR          = '0xc01ca57dc7f7c4b6f1b6b87b85d79e5ddf0df55d'
   const LATEST_EPOCH_SEL = '0x9cb118bf'
@@ -169,7 +172,8 @@ export async function waitForEpochOnEth(
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          jsonrpc: '2.0', id: 1,
+          jsonrpc: '2.0',
+          id: 1,
           method: 'eth_call',
           params: [{ to: LC_ADDR, data: LATEST_EPOCH_SEL }, 'latest'],
         }),
@@ -185,7 +189,7 @@ export async function waitForEpochOnEth(
         const estMin = Math.ceil(remaining * 10 / 60)
         onProgress?.(
           `Waiting for epoch ${lockEpoch} on Ethereum... ` +
-          `(current: ${latestEpoch}, ~${estMin} min remaining)`
+          `(current: ${latestEpoch}, ~${estMin} min remaining)`,
         )
       }
     } catch { /* keep polling */ }
@@ -195,13 +199,14 @@ export async function waitForEpochOnEth(
 
   throw new Error(
     `Timeout: epoch ${lockEpoch} not yet available on Ethereum after 1 hour. ` +
-    'You can retry the claim from Bridge History later.'
+    'You can retry the claim from Bridge History later.',
   )
 }
 
 /**
- * Refetch LockedEventData from Octra RPC using a known tx hash.
- * Used by HistoryPanel — no SDK needed.
+ * Refetch `LockedEventData` from Octra for a known tx hash.
+ * Used by `HistoryPanel` to power the "Re-claim" action without rebuilding
+ * the original bridge state.
  */
 export async function refetchLockedEvent(octraTxHash: string): Promise<LockedEventData> {
   const receipt = await getContractReceipt(octraTxHash)
@@ -227,19 +232,18 @@ export async function refetchLockedEvent(octraTxHash: string): Promise<LockedEve
 // ─── wOCT → OCT ──────────────────────────────────────────────────────────────
 
 /**
- * Burn wOCT on Ethereum to receive OCT on Octra.
- * Uses SDK sendEvmTransaction — no approve needed (burnToOctra is single call).
+ * Burn wOCT on Ethereum — the bridge relayer detects `BurnInitiated` and
+ * unlocks the equivalent OCT on Octra automatically. Single transaction;
+ * no separate `approve` is required.
  */
 export async function burnWoctToOctra(
   sdk: OctraSDK,
   params: {
     octraRecipient: string
     amountWoct: string
-    capabilityId: string
-    nonce: number
-  }
+  },
 ): Promise<string> {
-  const { octraRecipient, amountWoct, capabilityId } = params
+  const { octraRecipient, amountWoct } = params
 
   const rawAmount = toRawUnits(amountWoct, OCT_DECIMALS)
   if (rawAmount <= 0n) throw new Error('Amount must be greater than 0')
@@ -247,16 +251,18 @@ export async function burnWoctToOctra(
   const iface = new ethers.Interface(WOCT_ABI as ethers.InterfaceAbi)
   const calldata = iface.encodeFunctionData('burnToOctra', [octraRecipient, rawAmount])
 
-  const result = await sdk.sendEvmTransaction(capabilityId, {
-    to:   WOCT_CONTRACT_ADDRESS,
-    data: calldata,
+  const result = await sdk.evm.sendTransaction({
+    to:    WOCT_CONTRACT_ADDRESS,
+    data:  calldata,
+    value: '0',
   })
 
-  return result.txHash
+  return result.hash
 }
 
 /**
- * Get wOCT burn caps from the contract.
+ * Read the wOCT burn caps directly from the contract.
+ * Used by the BridgePanel to constrain the wOCT → OCT input.
  */
 export async function getWoctBurnCaps(provider: ethers.Provider): Promise<{
   perTx: string
@@ -273,15 +279,13 @@ export async function getWoctBurnCaps(provider: ethers.Provider): Promise<{
   }
 }
 
-// ─── Balance helpers ──────────────────────────────────────────────────────────
+// ─── Balance helpers ─────────────────────────────────────────────────────────
 
-export async function getWoctBalance(ethAddress: string, provider: ethers.Provider): Promise<string> {
+export async function getWoctBalance(
+  ethAddress: string,
+  provider: ethers.Provider,
+): Promise<string> {
   const contract = new ethers.Contract(WOCT_TOKEN_ADDRESS, WOCT_TOKEN_ABI, provider)
   const raw: bigint = await contract.balanceOf(ethAddress)
   return (Number(raw) / Math.pow(10, OCT_DECIMALS)).toFixed(6)
-}
-
-export async function getOctBalance(octraAddress: string): Promise<string> {
-  const bal = await getBalance(octraAddress)
-  return bal.formatted
 }

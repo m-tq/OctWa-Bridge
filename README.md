@@ -11,11 +11,12 @@ A web bridge for moving OCT between **Octra Chain** and **Ethereum** (as wOCT).
 OctWa Bridge connects native OCT on Octra with wOCT (Wrapped OCT) on Ethereum using a 1:1 lock/mint model — no liquidity pools, no swaps.
 
 | | |
-|---|---|
+| --- | --- |
 | **Octra Bridge Contract** | `oct5MrNfjiXFNRDLwsodn8Zm9hDKNGAYt3eQDCQ52bSpCHq` |
 | **ETH Bridge Contract** | `0xE7eD69b852fd2a1406080B26A37e8E04e7dA4caE` |
 | **wOCT Token** | `0x4647e1fE715c9e23959022C2416C71867F5a6E80` |
 | **Denomination** | 1 OCT = 1 wOCT = 1,000,000 raw units (6 decimals) |
+| **SDK** | [`@octwa/sdk@2.1.0`](https://www.npmjs.com/package/@octwa/sdk) (RFC-O-1) |
 
 ---
 
@@ -23,27 +24,27 @@ OctWa Bridge connects native OCT on Octra with wOCT (Wrapped OCT) on Ethereum us
 
 ### OCT → wOCT
 
-1. Call `lock_to_eth(eth_address)` on Octra bridge contract
-2. Wait for epoch confirmation on Octra (~10s per epoch)
-3. Wait for epoch header to be indexed on Ethereum lightClient (~39 min lag)
-4. Call `verifyAndMint(epochId, message, [], 0)` on ETH contract
-5. wOCT minted to recipient
+1. Call `lock_to_eth(eth_address)` on the Octra bridge contract using `sdk.sendContractTransaction(...)`.
+2. Wait for epoch confirmation on Octra (~10 s per epoch).
+3. Wait for the epoch header to be indexed by the Ethereum lightClient (~30–40 min lag).
+4. Call `verifyAndMint(epochId, message, [], 0)` on the Ethereum contract using `sdk.evm.sendTransaction(...)`.
+5. wOCT is minted to the recipient.
 
-### wOCT → OCT *(coming soon)*
+### wOCT → OCT
 
-1. Approve wOCT spend
-2. Call `burnToOctra(octraRecipient, amount)`
-3. OCT unlocked on Octra
+1. Call `burnToOctra(octraRecipient, amount)` on the Ethereum contract using `sdk.evm.sendTransaction(...)` — single transaction, no separate `approve`.
+2. The bridge relayer detects `BurnInitiated` and calls `unlock_trusted` on Octra.
+3. OCT arrives in the recipient address (~2 minutes).
 
 ---
 
 ## Requirements
 
-- **OctWa wallet extension** — [OctWa](https://github.com/m-tq/OctWa) installed in Chrome
-- **ETH on your EVM address** — ~0.0005 ETH for gas fees (verifyAndMint uses ~131k gas)
-- Octra mainnet RPC access
+- **OctWa wallet extension** — install [OctWa](https://github.com/m-tq/OctWa) in Chrome / Edge.
+- **ETH on your EVM address** — about 0.0005 ETH covers `verifyAndMint` gas (~131 k gas).
+- Octra mainnet RPC access (or your own HTTPS proxy — see below).
 
-> Your EVM address is automatically derived from your Octra private key (secp256k1) — no MetaMask needed.
+> Your EVM address is derived automatically from your Octra private key (secp256k1 over the same BIP39 seed). You do not need MetaMask.
 
 ---
 
@@ -52,7 +53,7 @@ OctWa Bridge connects native OCT on Octra with wOCT (Wrapped OCT) on Ethereum us
 ```bash
 cd bridge
 npm install
-npm run build   # output → dist/
+npm run build       # output → dist/
 ```
 
 ### Environment
@@ -68,13 +69,13 @@ VITE_INFURA_API_KEY=your_infura_api_key_here
 VITE_OCTRA_RPC=https://bridge.octwa.pw
 ```
 
-> `VITE_OCTRA_RPC` is the **base URL** (no `/rpc` suffix — the app appends it automatically).
+`VITE_OCTRA_RPC` is the **base URL** — the app appends `/rpc` automatically. Set `VITE_INFURA_API_KEY` only if you need higher rate limits; otherwise the bridge falls back to `https://ethereum.publicnode.com`.
 
 ---
 
-## Nginx Proxy (required for HTTPS)
+## Nginx Proxy (required for HTTPS deployments)
 
-The Octra node RPC runs on HTTP (`http://46.101.86.250:8080`). Browsers block HTTP requests from HTTPS pages (Mixed Content). You must proxy it through your HTTPS domain.
+The Octra node RPC runs on plain HTTP (`http://46.101.86.250:8080`). Browsers block HTTP requests from HTTPS pages (Mixed Content), so you must proxy through your HTTPS domain.
 
 Add to your Nginx server block (e.g. `/etc/nginx/sites-available/bridge.octwa.pw`):
 
@@ -85,13 +86,11 @@ server {
 
     # ... your existing SSL config ...
 
-    # Serve the bridge app
     root /path/to/bridge/dist;
     index index.html;
     try_files $uri $uri/ /index.html;
 
-    # Proxy Octra RPC — avoids Mixed Content error
-    # App calls /rpc, we forward to the Octra node
+    # Proxy Octra RPC — avoids Mixed Content errors
     location /rpc {
         proxy_pass http://46.101.86.250:8080/rpc;
         proxy_http_version 1.1;
@@ -108,38 +107,82 @@ server {
 }
 ```
 
-Then set in `.env`:
-
-```env
-VITE_OCTRA_RPC=https://bridge.octwa.pw/rpc
-```
-
-Rebuild after changing `.env`:
+After changing `.env`, rebuild and reload Nginx:
 
 ```bash
 npm run build
-```
-
-Reload Nginx:
-
-```bash
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
 ---
 
+## SDK Integration
+
+The bridge uses RFC-O-1 methods only — there is no direct call to `window.octra.invoke` or any legacy capability API.
+
+**Connect** — single approval for everything the bridge needs:
+
+```ts
+const accounts = await sdk.connect({
+  permissions: [
+    'read_address',
+    'read_balance',
+    'contract_calls',
+    'send_transactions',
+  ],
+})
+const evmAddress = await sdk.evm.getDerivedAddress()
+```
+
+**Lock OCT (Octra)** — opens the contract approval popup:
+
+```ts
+const result = await sdk.sendContractTransaction({
+  address: OCTRA_BRIDGE_CONTRACT,
+  method:  'lock_to_eth',
+  params:  [ethRecipient],
+  amount:  rawOuString,
+})
+```
+
+**Mint wOCT (Ethereum)** — opens the EVM transaction popup:
+
+```ts
+const result = await sdk.evm.sendTransaction({
+  to:    WOCT_CONTRACT_ADDRESS,
+  data:  encodedVerifyAndMintCalldata,
+  value: '0',
+})
+```
+
+**Burn wOCT (Ethereum)** — single tx, no separate approve:
+
+```ts
+const result = await sdk.evm.sendTransaction({
+  to:    WOCT_CONTRACT_ADDRESS,
+  data:  encodedBurnToOctraCalldata,
+  value: '0',
+})
+```
+
+The bridge does not request `evm_send_transactions` as a separate scope — the wallet accepts the broader `send_transactions` grant for EVM signing operations.
+
+---
+
 ## Bridge History
 
-History is fetched **on-chain** — no localStorage dependency:
+The history view is powered by on-chain reads — no `localStorage`-backed cache.
 
-- Queries `octra_transactionsByAddress` for last 20 `lock_to_eth` calls
-- For each tx: reads `contract_receipt` → Locked event → derives message hash
-- Checks `processedMessages(msgHash)` on ETH contract → `claimed` / `unclaimed`
-- Checks `lightClient.latestEpoch()` → `epoch_pending` if not yet indexed
+- `octra_transactionsByAddress` — last 20 `lock_to_eth` calls.
+- `contract_receipt` for each tx → `Locked` event → derived message hash.
+- `processedMessages(msgHash)` on ETH contract → `claimed` / `unclaimed`.
+- `lightClient.latestEpoch()` → `epoch_pending` if not yet indexed.
+
+For wOCT → OCT history, the panel scans `BurnInitiated` events emitted by the user's EVM address, in 49 k-block chunks back ~200 k blocks.
 
 ### Manual TX Lookup
 
-Enter any Octra tx hash in the History panel to check its claim status directly.
+Paste any Octra tx hash in the History panel to inspect its claim status, even if it was created from a different machine.
 
 ---
 
@@ -149,7 +192,7 @@ Default gas for `verifyAndMint`:
 - **Gas Limit**: 150,000
 - **Max Fee**: 3 Gwei
 
-These can be overridden in the invoke approval popup. Actual usage is ~131,561 gas.
+These can be overridden in the OctWa transaction approval popup. Actual usage on mainnet is ~131,500 gas.
 
 ---
 
@@ -160,7 +203,7 @@ These can be overridden in the invoke approval popup. Actual usage is ~131,561 g
 - Tailwind CSS (sharp edges, Fira Code font)
 - Framer Motion
 - ethers.js v6
-- Octra JSON-RPC 2.0
+- `@octwa/sdk@2.1.0` (RFC-O-1)
 
 ---
 
@@ -177,14 +220,14 @@ bridge/src/
 │   ├── Sidebar.tsx
 │   └── Footer.tsx
 ├── lib/
-│   ├── bridge-service.ts    # lock, waitForLockedEvent, claimWoctOnEthereum
-│   ├── on-chain-history.ts  # fetchBridgeHistory, lookupTxHash
-│   ├── pending-claims.ts    # localStorage pending ETH tx tracker
-│   ├── octra-rpc.ts         # Octra JSON-RPC client
-│   ├── constants.ts         # Contract addresses, fixed bridge fields
+│   ├── bridge-service.ts    # lockOctOnOctra, waitForLockedEvent, claimWoctOnEthereum, burnWoctToOctra
+│   ├── on-chain-history.ts  # fetchBridgeHistory, fetchBurnHistory, lookupTxHash
+│   ├── pending-claims.ts    # localStorage tracker for the in-flight ETH claim tx
+│   ├── octra-rpc.ts         # Read-only Octra JSON-RPC helpers (balance, receipts, pause check)
+│   ├── constants.ts         # Contract addresses, fixed bridge message fields
 │   └── types.ts
 └── hooks/
-    └── useWallets.ts        # OctWa extension connection + balances
+    └── useWallets.ts        # OctraSDK lifecycle + balances
 ```
 
 ---

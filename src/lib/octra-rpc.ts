@@ -148,10 +148,14 @@ export async function isBridgePaused(): Promise<boolean> {
  * we know the exact key and don't need the contract to execute anything.
  *
  * Returns:
- *   true  → relayer has called `unlock_trusted` and OCT was released
- *   false → still pending (or unknown — we don't distinguish)
+ *   true      → relayer has called `unlock_trusted` and OCT was released
+ *   false     → key is absent / value is not "1" (definitively not yet processed)
+ *   undefined → RPC error or timeout (caller should preserve any prior status
+ *               instead of downgrading; the unlock state is sticky on-chain
+ *               so a transient failure must NOT flip a previously-observed
+ *               `true` back to `false`)
  */
-export async function isBurnUnlocked(burnId: string): Promise<boolean> {
+export async function isBurnUnlocked(burnId: string): Promise<boolean | undefined> {
   try {
     const result = await rpc<{ key: string; value: string } | null>(
       'octra_contractStorage',
@@ -159,6 +163,6 @@ export async function isBurnUnlocked(burnId: string): Promise<boolean> {
     )
     return result?.value === '1'
   } catch {
-    return false
+    return undefined
   }
 }

@@ -325,13 +325,15 @@ export interface BurnRecord {
   /**
    * `confirmed` — burn tx is on-chain, but the relayer hasn't released OCT yet
    * `unlocked`  — relayer has called `unlock_trusted` on Octra (OCT delivered)
+   * `unknown`   — could not determine unlock status (Octra RPC error/timeout)
    *
    * The status is computed by reading `processed_unlocks:<burnId>` from the
    * Octra bridge contract. A burn that's been waiting longer than ~30 min
    * with status still `confirmed` is effectively stuck and needs operator
-   * attention.
+   * attention. `unknown` is a transient state — callers should keep any
+   * previously-observed terminal status (`unlocked`) rather than downgrade.
    */
-  status: 'confirmed' | 'unlocked'
+  status: 'confirmed' | 'unlocked' | 'unknown'
 }
 
 async function getBlockTimestamp(blockHex: string): Promise<number> {
@@ -444,6 +446,14 @@ export async function fetchBurnHistory(evmAddress: string): Promise<BurnRecord[]
       burnId ? isBurnUnlocked(burnId) : Promise.resolve(false),
     ])
 
+    // unlocked === undefined means RPC failed — surface as 'unknown' so the
+    // UI layer can apply sticky-status logic instead of misreporting a stuck
+    // burn as `confirmed` or vice versa.
+    const status: BurnRecord['status'] =
+      unlocked === true  ? 'unlocked'
+      : unlocked === false ? 'confirmed'
+      :                      'unknown'
+
     return {
       direction:      'woct-to-oct' as const,
       ethTxHash:      txHash,
@@ -454,7 +464,7 @@ export async function fetchBurnHistory(evmAddress: string): Promise<BurnRecord[]
       octraRecipient,
       burnNonce,
       burnId,
-      status:         unlocked ? 'unlocked' as const : 'confirmed' as const,
+      status,
     }
   }))
 

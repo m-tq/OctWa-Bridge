@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   ExternalLink, ArrowRight, RefreshCw, Loader2,
@@ -56,8 +56,25 @@ export function HistoryPanel({ octraAddress, evmAddress, sdk }: HistoryPanelProp
   const [lookupLoading, setLookupLoading]   = useState(false)
   const [lookupError, setLookupError]       = useState<string | null>(null)
 
+  // Race-condition guards.
+  // - `loadIdRef` tags every load with a monotonic id. Only the most-recent
+  //   load may commit results to state, so a slow earlier fetch can't
+  //   overwrite a fresh one when the user mashes refresh.
+  // - `recordsRef` / `burnRecordsRef` mirror the latest committed state
+  //   without re-creating the `load` callback. We need them to merge in
+  //   sticky terminal statuses (`claimed`, `unlocked`) — once on-chain
+  //   evidence shows a transfer completed, an `unknown`-from-RPC-error
+  //   read MUST NOT downgrade it.
+  const loadIdRef     = useRef(0)
+  const recordsRef    = useRef<BridgeTxRecord[]>([])
+  const burnRecordsRef = useRef<BurnRecord[]>([])
+
+  useEffect(() => { recordsRef.current     = records },     [records])
+  useEffect(() => { burnRecordsRef.current = burnRecords }, [burnRecords])
+
   const load = useCallback(async () => {
     if (!octraAddress && !evmAddress) return
+    const myId = ++loadIdRef.current
     setLoading(true)
     setError(null)
     try {
@@ -65,15 +82,54 @@ export function HistoryPanel({ octraAddress, evmAddress, sdk }: HistoryPanelProp
         octraAddress ? fetchBridgeHistory(octraAddress, getOctraRpc()) : Promise.resolve([]),
         evmAddress   ? fetchBurnHistory(evmAddress) : Promise.resolve([]),
       ])
-      if (lockData.status === 'fulfilled') setRecords(lockData.value)
-      if (burnData.status === 'fulfilled') setBurnRecords(burnData.value)
+
+      // Ignore results from a load that was superseded by a newer one.
+      if (myId !== loadIdRef.current) return
+
+      if (lockData.status === 'fulfilled') {
+        const fresh = lockData.value
+        const prev  = recordsRef.current
+        // Sticky `claimed`: once the ETH bridge has marked a message as
+        // processed, that's permanent. A transient ETH RPC error could
+        // make the next read return `unclaimed`/`unknown`; preserve the
+        // observed claim instead of flickering.
+        const merged = fresh.map(r => {
+          const prior = prev.find(p => p.octraTxHash === r.octraTxHash)
+          if (prior?.claimStatus === 'claimed' && r.claimStatus !== 'claimed') {
+            return { ...r, claimStatus: 'claimed' as const, claimed: true, msgHash: prior.msgHash ?? r.msgHash }
+          }
+          return r
+        })
+        setRecords(merged)
+      }
+
+      if (burnData.status === 'fulfilled') {
+        const fresh = burnData.value
+        const prev  = burnRecordsRef.current
+        // Sticky `unlocked` + `unknown` fallback to last known status.
+        const merged = fresh.map(b => {
+          const prior = prev.find(p => p.ethTxHash === b.ethTxHash)
+          if (prior?.status === 'unlocked' && b.status !== 'unlocked') {
+            return { ...b, status: 'unlocked' as const }
+          }
+          // RPC failed this round — keep whatever we observed previously.
+          if (b.status === 'unknown' && prior && prior.status !== 'unknown') {
+            return { ...b, status: prior.status }
+          }
+          return b
+        })
+        setBurnRecords(merged)
+      }
+
       if (lockData.status === 'rejected' && burnData.status === 'rejected') {
         setError(lockData.reason?.message || 'Failed to load history')
       }
     } catch (e) {
+      if (myId !== loadIdRef.current) return
       setError(e instanceof Error ? e.message : String(e))
     } finally {
-      setLoading(false)
+      // Only the latest load may flip the global loading flag off.
+      if (myId === loadIdRef.current) setLoading(false)
     }
   }, [octraAddress, evmAddress])
 
@@ -414,9 +470,14 @@ export function HistoryPanel({ octraAddress, evmAddress, sdk }: HistoryPanelProp
               ) : (
                 burnRecords.map(burn => {
                   const isUnlocked = burn.status === 'unlocked'
+                  const isUnknown  = burn.status === 'unknown'
                   const ageMs      = Date.now() - burn.timestamp
-                  // Relayer typically processes within ~5–15 min; flag as stuck after 30 min
-                  const isStuck    = !isUnlocked && ageMs > 30 * 60 * 1000
+                  // Relayer typically processes within ~5–15 min; flag as stuck
+                  // after 30 min — but only if we have a definitive `confirmed`
+                  // reading. Don't promote `unknown` (RPC error) to `stuck`,
+                  // that would mislead the user when the issue is just the
+                  // status RPC, not the relayer.
+                  const isStuck    = burn.status === 'confirmed' && ageMs > 30 * 60 * 1000
 
                   const supportPayload = [
                     `wOCT→OCT bridge — stuck burn`,
@@ -435,7 +496,13 @@ export function HistoryPanel({ octraAddress, evmAddress, sdk }: HistoryPanelProp
                     ? 'text-yellow-500 border-yellow-500/30'
                     : 'text-muted-foreground border-border'
 
-                  const badgeText = isUnlocked ? 'unlocked' : isStuck ? 'stuck' : 'pending unlock'
+                  const badgeText = isUnlocked
+                    ? 'unlocked'
+                    : isStuck
+                    ? 'stuck'
+                    : isUnknown
+                    ? 'checking…'
+                    : 'pending unlock'
 
                   const containerClass = cn(
                     'border p-2.5 text-[11px] space-y-1.5',
@@ -487,6 +554,11 @@ export function HistoryPanel({ octraAddress, evmAddress, sdk }: HistoryPanelProp
                         </div>
                       ) : isStuck ? (
                         <StuckBurnHelper supportPayload={supportPayload} />
+                      ) : isUnknown ? (
+                        <div className="flex items-center gap-1 text-[9px] text-muted-foreground">
+                          <Loader2 size={8} className="animate-spin shrink-0" />
+                          unlock status unavailable — retry refresh
+                        </div>
                       ) : (
                         <div className="flex items-center gap-1 text-[9px] text-muted-foreground">
                           <Loader2 size={8} className="animate-spin shrink-0" />

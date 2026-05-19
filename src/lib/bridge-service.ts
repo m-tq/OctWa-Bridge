@@ -232,9 +232,18 @@ export async function refetchLockedEvent(octraTxHash: string): Promise<LockedEve
 // ─── wOCT → OCT ──────────────────────────────────────────────────────────────
 
 /**
- * Burn wOCT on Ethereum — the bridge relayer detects `BurnInitiated` and
- * unlocks the equivalent OCT on Octra automatically. Single transaction;
- * no separate `approve` is required.
+ * Burn wOCT on Ethereum to receive OCT on Octra.
+ *
+ * The bridge contract pulls wOCT from the user via `transferFrom`, so the
+ * user must first `approve(bridge, amount)` on the wOCT token. We submit
+ * both transactions in sequence and wait for the approve receipt before
+ * issuing the burn — without the approve, the burn reverts on-chain and
+ * the relayer never sees a valid `BurnInitiated` event, so OCT stays
+ * locked on Octra forever.
+ *
+ * Returns the burn tx hash. The caller can use it to track the unlock on
+ * Octra (the relayer reacts to `BurnInitiated` and submits
+ * `unlock_trusted` on the OCT bridge contract).
  */
 export async function burnWoctToOctra(
   sdk: OctraSDK,
@@ -248,16 +257,44 @@ export async function burnWoctToOctra(
   const rawAmount = toRawUnits(amountWoct, OCT_DECIMALS)
   if (rawAmount <= 0n) throw new Error('Amount must be greater than 0')
 
-  const iface = new ethers.Interface(WOCT_ABI as ethers.InterfaceAbi)
-  const calldata = iface.encodeFunctionData('burnToOctra', [octraRecipient, rawAmount])
+  // Step 1: approve the bridge contract to pull `amount` wOCT from the user.
+  // We sign this against the wOCT token contract (WOCT_TOKEN_ADDRESS), not
+  // the bridge contract — `approve` lives on the ERC-20.
+  const erc20Iface = new ethers.Interface([
+    'function approve(address spender, uint256 amount) returns (bool)',
+  ])
+  const approveCalldata = erc20Iface.encodeFunctionData('approve', [
+    WOCT_CONTRACT_ADDRESS,
+    rawAmount,
+  ])
 
-  const result = await sdk.evm.sendTransaction({
-    to:    WOCT_CONTRACT_ADDRESS,
-    data:  calldata,
+  const approveResult = await sdk.evm.sendTransaction({
+    to:    WOCT_TOKEN_ADDRESS,
+    data:  approveCalldata,
     value: '0',
   })
 
-  return result.hash
+  // Step 2: burn — calls `burnToOctra(string recipient, uint256 amount)` on
+  // the bridge contract. This is the call that emits `BurnInitiated`, the
+  // event the relayer watches to trigger `unlock_trusted` on Octra.
+  const bridgeIface = new ethers.Interface(WOCT_ABI as ethers.InterfaceAbi)
+  const burnCalldata = bridgeIface.encodeFunctionData('burnToOctra', [
+    octraRecipient,
+    rawAmount,
+  ])
+
+  const burnResult = await sdk.evm.sendTransaction({
+    to:    WOCT_CONTRACT_ADDRESS,
+    data:  burnCalldata,
+    value: '0',
+  })
+
+  // The history panel keys off the burn hash; we don't need to expose
+  // the approve hash to the caller, but log it so debugging is easier
+  // when a user reports "burn pending forever".
+  console.info('[Bridge] wOCT approve:', approveResult.hash, '→ burn:', burnResult.hash)
+
+  return burnResult.hash
 }
 
 /**

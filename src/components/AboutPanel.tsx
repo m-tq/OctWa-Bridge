@@ -88,9 +88,9 @@ export function AboutPanel() {
           </h3>
           <ol className="space-y-1 text-xs text-muted-foreground list-none">
             {[
-              'Call burnToOctra on Ethereum (single tx, no approve needed)',
-              'Bridge relayer detects BurnInitiated event',
-              'OCT unlocked on Octra via unlock_trusted',
+              'Approve wOCT spend (lets the bridge contract pull wOCT)',
+              'Call burnToOctra on the bridge contract — emits BurnInitiated',
+              'Bridge relayer detects BurnInitiated and submits unlock_trusted on Octra',
               'OCT arrives in ~2 minutes',
             ].map((step, i) => (
               <li key={i} className="flex items-start gap-2">

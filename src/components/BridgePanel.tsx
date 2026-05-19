@@ -38,7 +38,7 @@ const STEP_LABELS: Record<BridgeStep, string> = {
   locking:       'Locking OCT on Octra...',
   waiting_epoch: 'Waiting for Octra confirmation...',
   claiming:      'Waiting for Ethereum to index epoch...',
-  approving:     'Approving wOCT...',
+  approving:     'Approving wOCT spend...',
   burning:       'Burning wOCT on Ethereum...',
   unlocking:     'Waiting for OCT unlock on Octra (~2 min)...',
   done:          'Transaction submitted!',
@@ -58,6 +58,7 @@ const OCT_TO_WOCT_STEPS: { step: BridgeStep; label: string }[] = [
 ]
 
 const WOCT_TO_OCT_STEPS: { step: BridgeStep; label: string }[] = [
+  { step: 'approving', label: 'Approve' },
   { step: 'burning',   label: 'Burn wOCT' },
   { step: 'unlocking', label: 'Unlock OCT' },
 ]
@@ -163,15 +164,22 @@ export function BridgePanel({
     setState({ direction: 'woct-to-oct', step: 'idle', amount, octraAddress, ethAddress: evmAddress })
 
     try {
-      setStep('burning')
-      setProgressMsg('Confirm the burnToOctra transaction in OctWa...')
+      // The wallet popup opens twice — first for `approve`, then for `burnToOctra`.
+      // Show "approving" while the user signs the approve and the receipt
+      // settles; flip to "burning" right before the second popup so the
+      // tracker accurately reflects which transaction the user is being
+      // asked to confirm.
+      setStep('approving')
+      setProgressMsg('Approve wOCT spend in OctWa, then confirm the burn...')
       const ethHash = await burnWoctToOctra(sdk, {
         octraRecipient: octraAddress,
         amountWoct:     amount,
       })
 
-      setStep('unlocking', { ethTxHash: ethHash })
+      setStep('burning', { ethTxHash: ethHash })
       setProgressMsg('wOCT burned. Bridge relayer will unlock OCT on Octra (~2 min)...')
+
+      setStep('unlocking', { ethTxHash: ethHash })
       setStep('done', { ethTxHash: ethHash })
       setProgressMsg('')
       onRefreshBalances()

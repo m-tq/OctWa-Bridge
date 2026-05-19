@@ -32,9 +32,10 @@ OctWa Bridge connects native OCT on Octra with wOCT (Wrapped OCT) on Ethereum us
 
 ### wOCT → OCT
 
-1. Call `burnToOctra(octraRecipient, amount)` on the Ethereum contract using `sdk.evm.sendTransaction(...)` — single transaction, no separate `approve`.
-2. The bridge relayer detects `BurnInitiated` and calls `unlock_trusted` on Octra.
-3. OCT arrives in the recipient address (~2 minutes).
+1. Approve the bridge contract to spend wOCT (`wOCT.approve(bridge, amount)`).
+2. Call `burnToOctra(octraRecipient, amount)` on the bridge contract — emits `BurnInitiated`.
+3. The bridge relayer detects `BurnInitiated` and calls `unlock_trusted` on Octra.
+4. OCT arrives in the recipient address (~2 minutes).
 
 ---
 
@@ -155,15 +156,25 @@ const result = await sdk.evm.sendTransaction({
 })
 ```
 
-**Burn wOCT (Ethereum)** — single tx, no separate approve:
+**Burn wOCT (Ethereum)** — two transactions: approve the bridge to pull wOCT, then burn:
 
 ```ts
+// Step 1 — approve
+await sdk.evm.sendTransaction({
+  to:    WOCT_TOKEN_ADDRESS,
+  data:  encodeApprove(BRIDGE, amount),
+  value: '0',
+})
+
+// Step 2 — burn
 const result = await sdk.evm.sendTransaction({
-  to:    WOCT_CONTRACT_ADDRESS,
-  data:  encodedBurnToOctraCalldata,
+  to:    BRIDGE,
+  data:  encodeBurnToOctra(octraRecipient, amount),
   value: '0',
 })
 ```
+
+The relayer reacts to the `BurnInitiated` event emitted by the burn transaction. Without the approve, the burn reverts on-chain and the relayer never sees a valid event — OCT stays locked.
 
 The bridge does not request `evm_send_transactions` as a separate scope — the wallet accepts the broader `send_transactions` grant for EVM signing operations.
 
